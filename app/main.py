@@ -24,9 +24,10 @@ from app.oi_analyzer import (
     get_option_chain_analysis,
     SIGNAL_META,
     CATEGORY_TO_SIGNAL,
+    _parse_buildup_row,
 )
-from app.nse_fetcher import fetch_buildup_category, fetch_quote_derivative
-from app.oi_analyzer import _parse_buildup_row, _f, _symbol
+from app.nse_fetcher import fetch_all_fno_oi_change, fetch_quote_derivative
+from app.oi_analyzer import _f, _symbol
 
 logging.basicConfig(
     level=logging.INFO,
@@ -176,8 +177,10 @@ async def category_scan(
     refresh: bool = Query(False),
 ):
     """
-    Get stocks from NSE's pre-computed buildup lists.
+    Get stocks filtered by signal category.
     category: long_buildup | short_buildup | short_covering | long_unwinding
+
+    Uses the same single NSE endpoint as /api/oi-signals, filtered by category.
     """
     valid = list(CATEGORY_TO_SIGNAL.keys())
     if category not in valid:
@@ -192,11 +195,12 @@ async def category_scan(
 
     cached = cache.get(cache_key)
     if cached is None:
-        signal = CATEGORY_TO_SIGNAL[category]
-        rows   = await asyncio.to_thread(fetch_buildup_category, category)
-        cached = [r for r in
-                  [_parse_buildup_row(row, signal) for row in rows]
-                  if r is not None]
+        target_signal = CATEGORY_TO_SIGNAL[category]
+        # Reuse the full scan and filter by signal type
+        all_signals = cache.get("all_signals")
+        if all_signals is None:
+            all_signals = await asyncio.to_thread(_refresh_signals)
+        cached = [r for r in all_signals if r["signal"] == target_signal]
         cache.set(cache_key, cached, ttl=CACHE_TTL_SECONDS)
 
     return {
