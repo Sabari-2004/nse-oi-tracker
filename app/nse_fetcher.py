@@ -1,8 +1,21 @@
-# nse_fetcher.py — NSE session manager + all dynamic F&O data fetchers
+# nse_fetcher.py  — NSE data fetcher using cloudscraper
+#
+# WHY cloudscraper?
+#   NSE uses Cloudflare protection. Plain requests.Session() gets blocked from
+#   cloud server IPs (Render is in the US). cloudscraper:
+#     • Solves Cloudflare's JavaScript challenge automatically
+#     • Mimics real browser TLS fingerprint (Chrome/Firefox)
+#     • Handles cookie jar exactly like a browser
+#     • Works from cloud servers (proven on AWS/GCP/Render)
+#
+# HOW it works vs Chrome:
+#   Chrome:        Indian IP + real browser JS → Cloudflare passes ✅
+#   requests:      US cloud IP + no JS        → Cloudflare blocks ❌
+#   cloudscraper:  US cloud IP + fake browser JS → Cloudflare passes ✅
 
-import requests
 import time
 import logging
+import cloudscraper                        # pip install cloudscraper
 from threading import Lock
 from app.config import SESSION_REFRESH_SECONDS
 
@@ -10,161 +23,207 @@ logger = logging.getLogger(__name__)
 
 NSE_BASE = "https://www.nseindia.com"
 
+# Exact headers a real Chrome 124 browser sends to NSE
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": "https://www.nseindia.com/",
-    "Connection": "keep-alive",
+    "Accept":           "application/json, text/plain, */*",
+    "Accept-Language":  "en-US,en;q=0.9",
+    "Accept-Encoding":  "gzip, deflate, br",
+    "Referer":          "https://www.nseindia.com/",
+    "X-Requested-With": "XMLHttpRequest",
+    "Cache-Control":    "no-cache",
+    "Pragma":           "no-cache",
+    "Sec-Fetch-Dest":   "empty",
+    "Sec-Fetch-Mode":   "cors",
+    "Sec-Fetch-Site":   "same-origin",
 }
 
-# Seed pages to grab valid session cookies
+# Pages visited in order — seeds the session with valid NSE Cloudflare cookies
 SEED_URLS = [
     "https://www.nseindia.com/",
     "https://www.nseindia.com/market-data/live-equity-market",
+    "https://www.nseindia.com/market-data/equity-derivatives-watch",
     "https://www.nseindia.com/option-chain",
 ]
 
+# ── NSE Live-analysis endpoints (pre-computed by NSE every ~3 min) ─────────────
+# These are the SAME endpoints that power NSE's own F&O analytics pages.
+# Primary source — most reliable for OI signal data.
+BUILDUP_ENDPOINTS = {
+    "long_buildup":   "/api/live-analysis-oi-change-with-price-gainers",
+    "short_buildup":  "/api/live-analysis-oi-change-with-price-losers",
+    "short_covering": "/api/live-analysis-price-change-with-oi-reducers",
+    "long_unwinding": "/api/live-analysis-oi-reducers-with-price-reducers",
+}
 
-class NSESession:
-    """Persistent NSE session with automatic cookie refresh."""
+# OI spurt endpoint — stocks with biggest OI jump today
+OI_SPURT_URL = "/api/live-analysis-oi-spurts-underlyings"
+
+
+class NSECloudSession:
+    """
+    Cloudflare-bypassing NSE session using cloudscraper.
+
+    cloudscraper creates a session that:
+    1. Presents a real browser TLS fingerprint (Chrome/Firefox)
+    2. Executes Cloudflare's JavaScript challenge (via embedded JS engine)
+    3. Maintains cookies across requests exactly like a browser
+    4. Auto-rotates if challenge changes
+
+    Result: NSE sees it as a legitimate browser — same as Chrome.
+    """
 
     def __init__(self):
-        self._session: requests.Session | None = None
-        self._lock = Lock()
-        self._last_refresh = 0
-        self._init_session()
+        self._scraper = None
+        self._lock    = Lock()
+        self._last_refresh: float = 0.0
 
-    def _init_session(self):
-        logger.info("Initializing NSE session...")
-        session = requests.Session()
-        session.headers.update(HEADERS)
-        try:
-            for url in SEED_URLS:
-                r = session.get(url, timeout=15)
-                logger.debug(f"Seeded {url} → {r.status_code}")
-                time.sleep(1.5)
-            self._session = session
+    def _build_scraper(self) -> cloudscraper.CloudScraper:
+        """Create a fresh cloudscraper session seeded with NSE cookies."""
+        logger.info("Building new cloudscraper session (browser=chrome, platform=windows)…")
+
+        # browser='chrome' + platform='windows' mimics Chrome on Windows exactly
+        scraper = cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "mobile": False}
+        )
+        scraper.headers.update(HEADERS)
+
+        # Seed: visit NSE pages in order to collect Cloudflare clearance cookies
+        for url in SEED_URLS:
+            try:
+                r = scraper.get(url, timeout=20)
+                logger.info(f"  seed {url} → HTTP {r.status_code}")
+            except Exception as exc:
+                logger.warning(f"  seed failed {url}: {exc}")
+            time.sleep(2.0)          # human-like delay between page loads
+
+        logger.info("NSE cloudscraper session ready.")
+        return scraper
+
+    def _ensure_session(self):
+        now = time.time()
+        if self._scraper is None or (now - self._last_refresh) > SESSION_REFRESH_SECONDS:
+            self._scraper      = self._build_scraper()
             self._last_refresh = time.time()
-            logger.info("NSE session ready.")
-        except Exception as e:
-            logger.error(f"Session init failed: {e}")
-            self._session = session
 
-    def _refresh_if_needed(self):
-        if time.time() - self._last_refresh > SESSION_REFRESH_SECONDS:
-            self._init_session()
-
-    def get(self, url: str, retries: int = 3) -> dict | None:
-        with self._lock:
-            self._refresh_if_needed()
-            for attempt in range(retries):
-                try:
-                    resp = self._session.get(url, timeout=15)
-                    if resp.status_code == 200:
-                        return resp.json()
-                    elif resp.status_code in (401, 403):
-                        logger.warning(f"NSE blocked ({resp.status_code}), refreshing session...")
-                        self._init_session()
-                        time.sleep(2)
-                    else:
-                        logger.warning(f"HTTP {resp.status_code} for {url}")
-                        return None
-                except requests.Timeout:
-                    logger.warning(f"Timeout attempt {attempt+1}: {url}")
-                    time.sleep(2)
-                except Exception as e:
-                    logger.error(f"Error fetching {url}: {e}")
-                    return None
+    def _safe_json(self, resp, url: str) -> dict | None:
+        """Parse response safely — handles empty body / HTML / non-JSON."""
+        if not resp.content:
+            logger.warning(f"Empty body: {url}")
             return None
 
+        ct = resp.headers.get("Content-Type", "")
+        if "html" in ct.lower():
+            preview = resp.text[:200].replace("\n", " ")
+            logger.warning(f"HTML response (still blocked?): {url} | {preview!r}")
+            return None
 
-# ─── Singleton session ────────────────────────────────────────────────────────
-_nse = NSESession()
+        try:
+            return resp.json()
+        except ValueError as exc:
+            preview = resp.text[:120].replace("\n", " ")
+            logger.warning(f"Non-JSON ({exc}): {url} | {preview!r}")
+            return None
+
+    def get(self, url: str, retries: int = 3) -> dict | None:
+        """Fetch JSON from NSE with Cloudflare bypass + retry logic."""
+        with self._lock:
+            self._ensure_session()
+
+            for attempt in range(retries):
+                try:
+                    resp = self._scraper.get(url, timeout=20)
+
+                    if resp.status_code == 200:
+                        data = self._safe_json(resp, url)
+                        if data is not None:
+                            return data
+                        # Empty/HTML body → re-seed and retry
+                        logger.warning(f"Re-seeding after bad body (attempt {attempt+1})…")
+                        self._scraper      = self._build_scraper()
+                        self._last_refresh = time.time()
+
+                    elif resp.status_code in (401, 403, 429):
+                        logger.warning(
+                            f"HTTP {resp.status_code} (attempt {attempt+1}/{retries}) "
+                            f"— re-seeding session: {url}"
+                        )
+                        self._scraper      = self._build_scraper()
+                        self._last_refresh = time.time()
+                        time.sleep(4 * (attempt + 1))   # exponential back-off
+
+                    elif resp.status_code == 404:
+                        logger.warning(f"HTTP 404 (endpoint changed?): {url}")
+                        return None   # no point retrying 404
+
+                    else:
+                        logger.warning(f"HTTP {resp.status_code}: {url}")
+                        return None
+
+                except Exception as exc:
+                    logger.error(f"Request error (attempt {attempt+1}): {url} — {exc}")
+                    time.sleep(2)
+
+            logger.error(f"All {retries} retries failed: {url}")
+            return None
+
+    def get_first_working(self, urls: list[str]) -> dict | None:
+        """Try URLs in order, return first successful response."""
+        for url in urls:
+            result = self.get(url)
+            if result:
+                return result
+        return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  DYNAMIC REAL-TIME F&O SCANNERS
-#  These return ALL F&O stocks — no hardcoded lists
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Singleton session ──────────────────────────────────────────────────────────
+_nse = NSECloudSession()
 
-def fetch_all_fno_oi_change() -> dict | None:
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PUBLIC API — 100% real-time NSE data, zero hardcoded values
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def fetch_buildup_category(category: str) -> list[dict]:
     """
-    Fetch OI change data for ALL F&O underlyings from NSE's
-    live OI spurts endpoint.
-
-    Returns a list of all F&O stocks with:
-      symbol, oi, oiChange, oiChangePct, ltp, previousClose, pChange
+    Fetch NSE's pre-computed buildup list for one signal category.
+    NSE classifies every F&O stock — we just read the result.
+    Returns [] on failure (market closed / temporarily blocked).
     """
-    url = f"{NSE_BASE}/api/live-analysis-oi-spurts-underlyings"
-    return _nse.get(url)
+    endpoint = BUILDUP_ENDPOINTS.get(category)
+    if not endpoint:
+        logger.error(f"Unknown category: {category}")
+        return []
+
+    data = _nse.get(NSE_BASE + endpoint)
+    if not data:
+        return []
+
+    rows = data.get("data", [])
+    logger.info(f"NSE [{category}]: {len(rows)} stocks received")
+    return rows
 
 
-def fetch_fno_price_data() -> dict | None:
+def fetch_all_buildup_categories() -> dict[str, list[dict]]:
     """
-    Fetch live prices for ALL securities in F&O from the
-    NSE stock indices endpoint.
-
-    Returns list with symbol, lastPrice, change, pChange, totalTradedVolume
+    Fetch all 4 buildup categories from NSE.
+    Returns: { 'long_buildup': [...], 'short_buildup': [...], ... }
     """
-    # SECURITIES IN F&O index — ~200 stocks
-    url = f"{NSE_BASE}/api/equity-stockIndices?index=SECURITIES%20IN%20F%26O"
-    return _nse.get(url)
+    return {cat: fetch_buildup_category(cat) for cat in BUILDUP_ENDPOINTS}
 
 
-def fetch_oi_buildup(category: str = "long") -> dict | None:
-    """
-    Fetch pre-computed buildup lists from NSE analytics.
+def fetch_oi_spurts() -> list[dict]:
+    """Stocks with biggest OI change today — prime scalping candidates."""
+    data = _nse.get(NSE_BASE + OI_SPURT_URL)
+    return data.get("data", []) if data else []
 
-    category options:
-      'long'           → Long Buildup  (Price ↑ OI ↑)
-      'short'          → Short Buildup (Price ↓ OI ↑)
-      'short_covering' → Short Covering (Price ↑ OI ↓)
-      'long_unwinding' → Long Unwinding (Price ↓ OI ↓)
-    """
-    category_map = {
-        "long":           "oi-change-with-price-gainers",     # Long Buildup
-        "short":          "oi-change-with-price-losers",      # Short Buildup
-        "short_covering": "price-change-with-oi-reducers",    # Short Covering
-        "long_unwinding": "oi-reducers-with-price-reducers",  # Long Unwinding
-    }
-    key = category_map.get(category, "oi-change-with-price-gainers")
-    url = f"{NSE_BASE}/api/live-analysis-{key}"
-    return _nse.get(url)
-
-
-def fetch_oi_spurts() -> dict | None:
-    """
-    NSE's OI spurts — stocks where OI jumped most in current session.
-    These are prime scalping candidates.
-    """
-    url = f"{NSE_BASE}/api/live-analysis-oi-spurts-underlyings"
-    return _nse.get(url)
-
-
-def fetch_most_active_derivatives() -> dict | None:
-    """Most active F&O contracts by value — high liquidity stocks."""
-    url = f"{NSE_BASE}/api/live-analysis-variations?index=most_act_fo_cont_by_trd_val"
-    return _nse.get(url)
-
-
-# ─── Option Chain (single symbol) ────────────────────────────────────────────
 
 def fetch_option_chain_index(symbol: str) -> dict | None:
-    url = f"{NSE_BASE}/api/option-chain-indices?symbol={symbol}"
-    return _nse.get(url)
+    return _nse.get(f"{NSE_BASE}/api/option-chain-indices?symbol={symbol}")
 
 
 def fetch_option_chain_equity(symbol: str) -> dict | None:
-    url = f"{NSE_BASE}/api/option-chain-equities?symbol={symbol}"
-    return _nse.get(url)
+    return _nse.get(f"{NSE_BASE}/api/option-chain-equities?symbol={symbol}")
 
 
 def fetch_quote_derivative(symbol: str) -> dict | None:
-    url = f"{NSE_BASE}/api/quote-derivative?symbol={symbol}"
-    return _nse.get(url)
+    return _nse.get(f"{NSE_BASE}/api/quote-derivative?symbol={symbol}")

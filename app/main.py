@@ -105,9 +105,9 @@ async def root():
     return FileResponse("static/index.html")
 
 
-@app.get("/api/health")
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health():
-    """Health check + UptimeRobot ping endpoint."""
+    """Health check — accepts GET and HEAD (UptimeRobot uses HEAD)."""
     now = datetime.now(IST)
     return {
         "status": "ok",
