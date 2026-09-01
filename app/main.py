@@ -1,4 +1,6 @@
-# main.py — FastAPI app (dynamic real-time F&O OI scanner)
+# main.py — FastAPI app for NSE F&O OI Scanner
+# Fixes: removed deleted imports (scan_by_category, get_futures_signal),
+#        HEAD method on /api/health, updated /api/category route
 
 import logging
 import asyncio
@@ -19,11 +21,12 @@ from app.config import (
 from app.cache import cache
 from app.oi_analyzer import (
     scan_all_fno_realtime,
-    scan_by_category,
-    get_futures_signal,
     get_option_chain_analysis,
     SIGNAL_META,
+    CATEGORY_TO_SIGNAL,
 )
+from app.nse_fetcher import fetch_buildup_category, fetch_quote_derivative
+from app.oi_analyzer import _parse_buildup_row, _f, _symbol
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,7 +36,7 @@ logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
 
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def is_market_open() -> bool:
     now = datetime.now(IST)
@@ -45,60 +48,56 @@ def is_market_open() -> bool:
 
 
 def _refresh_signals() -> list[dict]:
-    """Run full dynamic F&O scan and cache the result."""
     signals = scan_all_fno_realtime()
     cache.set("all_signals", signals, ttl=CACHE_TTL_SECONDS)
-    logger.info(f"Scanned all F&O: {len(signals)} active signals found.")
+    logger.info(f"Scan complete — {len(signals)} high-confidence signals found.")
     return signals
 
 
-def _refresh_category(category: str) -> list[dict]:
-    results = scan_by_category(category)
-    cache.set(f"cat:{category}", results, ttl=CACHE_TTL_SECONDS)
-    return results
-
-
-# ─── Background poller ────────────────────────────────────────────────────────
+# ── Background poller ─────────────────────────────────────────────────────────
 
 async def background_poller():
-    """Poll NSE every 60 s during market hours — pre-warms cache."""
+    """Re-scan all F&O stocks every 60 s during market hours."""
     while True:
         if is_market_open():
-            logger.info("Market open — running dynamic OI scan...")
-            await asyncio.to_thread(_refresh_signals)
+            logger.info("Market open — scanning all F&O stocks…")
+            try:
+                await asyncio.to_thread(_refresh_signals)
+            except Exception as exc:
+                logger.error(f"Background scan error: {exc}")
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
 
-# ─── App lifecycle ─────────────────────────────────────────────────────────────
+# ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("NSE OI Tracker starting up...")
+    logger.info("NSE OI Tracker starting — Singapore region 🇸🇬")
     task = asyncio.create_task(background_poller())
     yield
     task.cancel()
 
 
-# ─── FastAPI ───────────────────────────────────────────────────────────────────
+# ── FastAPI app ───────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="NSE F&O OI Scanner",
-    description="Dynamic real-time scanner — surfaces ALL F&O stocks with active OI + price signals",
-    version="2.0.0",
+    description="Real-time high-confidence OI signal scanner for all NSE F&O stocks",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "HEAD"],
     allow_headers=["*"],
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
-# ─── Routes ───────────────────────────────────────────────────────────────────
+# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/", include_in_schema=False)
 async def root():
@@ -107,56 +106,67 @@ async def root():
 
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health():
-    """Health check — accepts GET and HEAD (UptimeRobot uses HEAD)."""
+    """
+    Health check endpoint.
+    Accepts GET and HEAD — UptimeRobot sends HEAD requests.
+    """
     now = datetime.now(IST)
     return {
         "status": "ok",
         "time_ist": now.strftime("%Y-%m-%d %H:%M:%S IST"),
         "market_open": is_market_open(),
-        "cached_scans": len(cache.keys()),
+        "region": "singapore",
+        "version": "3.0.0",
     }
 
 
 @app.get("/api/oi-signals")
 async def oi_signals(
-    refresh: bool = Query(False, description="Force fresh NSE fetch"),
-    signal: str = Query("", description="Filter by signal type (LONG_BUILDUP, SHORT_BUILDUP, etc.)"),
-    min_strength: float = Query(0, description="Minimum signal strength 0–100"),
+    refresh:      bool  = Query(False, description="Force fresh NSE fetch"),
+    signal:       str   = Query("",    description="Filter: LONG_BUILDUP | SHORT_BUILDUP | SHORT_COVERING | LONG_UNWINDING"),
+    tier:         str   = Query("",    description="Filter by confidence tier: HIGH | MEDIUM"),
+    min_strength: float = Query(0,     description="Min strength score 0–100"),
 ):
     """
-    Dynamic scan of ALL F&O stocks — returns only those with active OI signals.
-    No fixed watchlist. Stocks appear here only if they are actually moving.
+    Dynamically scan ALL NSE F&O stocks.
+    Returns only HIGH + MEDIUM confidence signals (no noise).
     """
     if refresh:
         cache.delete("all_signals")
 
     cached = cache.get("all_signals")
-    if not cached:
+    if cached is None:
         cached = await asyncio.to_thread(_refresh_signals)
 
-    results = cached or []
+    results = list(cached or [])
 
-    # Apply filters
+    # Filters
     if signal:
         results = [r for r in results if r["signal"] == signal.upper()]
+    if tier:
+        results = [r for r in results if r["confidence_tier"] == tier.upper()]
     if min_strength > 0:
         results = [r for r in results if r["strength"] >= min_strength]
 
-    # Summary counts
+    # Per-signal counts (from full unfiltered list)
     counts = {}
     for r in (cached or []):
         counts[r["signal"]] = counts.get(r["signal"], 0) + 1
 
+    high_count   = sum(1 for r in (cached or []) if r.get("confidence_tier") == "HIGH")
+    medium_count = sum(1 for r in (cached or []) if r.get("confidence_tier") == "MEDIUM")
+
     return {
-        "source": "cache" if cached else "live",
+        "market_open":      is_market_open(),
         "total_fno_active": len(cached or []),
-        "filtered_count": len(results),
-        "market_open": is_market_open(),
-        "signal_counts": counts,
-        "signal_meta": SIGNAL_META,
-        "signals": results,
-        "timestamp": datetime.now(IST).strftime("%H:%M:%S"),
-        "note": "Dynamic scan of all NSE F&O stocks — showing only stocks with active OI signals",
+        "high_confidence":  high_count,
+        "medium_confidence": medium_count,
+        "filtered_count":   len(results),
+        "signal_counts":    counts,
+        "signal_meta":      SIGNAL_META,
+        "signals":          results,
+        "timestamp":        datetime.now(IST).strftime("%H:%M:%S"),
+        "note": "Only HIGH/MEDIUM confidence signals shown. Powered by NSE pre-computed buildup endpoints.",
     }
 
 
@@ -167,51 +177,103 @@ async def category_scan(
 ):
     """
     Get stocks from NSE's pre-computed buildup lists.
-
-    category: long | short | short_covering | long_unwinding
+    category: long_buildup | short_buildup | short_covering | long_unwinding
     """
-    valid = ["long", "short", "short_covering", "long_unwinding"]
+    valid = list(CATEGORY_TO_SIGNAL.keys())
     if category not in valid:
-        raise HTTPException(status_code=400, detail=f"category must be one of {valid}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"category must be one of: {valid}"
+        )
 
+    cache_key = f"cat:{category}"
     if refresh:
-        cache.delete(f"cat:{category}")
+        cache.delete(cache_key)
 
-    cached = cache.get(f"cat:{category}")
-    if not cached:
-        cached = await asyncio.to_thread(_refresh_category, category)
+    cached = cache.get(cache_key)
+    if cached is None:
+        signal = CATEGORY_TO_SIGNAL[category]
+        rows   = await asyncio.to_thread(fetch_buildup_category, category)
+        cached = [r for r in
+                  [_parse_buildup_row(row, signal) for row in rows]
+                  if r is not None]
+        cache.set(cache_key, cached, ttl=CACHE_TTL_SECONDS)
 
     return {
-        "category": category,
-        "count": len(cached),
-        "data": cached,
+        "category":  category,
+        "signal":    CATEGORY_TO_SIGNAL.get(category),
+        "count":     len(cached),
+        "data":      cached,
         "timestamp": datetime.now(IST).strftime("%H:%M:%S"),
     }
 
 
 @app.get("/api/option-chain/{symbol}")
 async def option_chain(symbol: str):
-    """Full option chain for a symbol — ATM ± 10 strikes."""
-    symbol = symbol.upper()
-    cached = cache.get(f"chain:{symbol}")
+    """Full option chain for a symbol — ATM ± 10 strikes, PCR, max pain."""
+    symbol = symbol.upper().strip()
+    cache_key = f"chain:{symbol}"
+
+    cached = cache.get(cache_key)
     if cached:
         return {"source": "cache", **cached}
+
     result = await asyncio.to_thread(get_option_chain_analysis, symbol)
     if "error" in result:
         raise HTTPException(status_code=503, detail=result["error"])
-    cache.set(f"chain:{symbol}", result)
+
+    cache.set(cache_key, result, ttl=CACHE_TTL_SECONDS)
     return {"source": "live", **result}
 
 
 @app.get("/api/signal/{symbol}")
 async def single_signal(symbol: str):
-    """Get OI signal for any specific F&O symbol on demand."""
-    symbol = symbol.upper()
-    cached = cache.get(f"sig:{symbol}")
+    """
+    On-demand OI signal for any specific F&O symbol.
+    Fetches live futures quote from NSE derivative endpoint.
+    """
+    symbol    = symbol.upper().strip()
+    cache_key = f"sig:{symbol}"
+
+    cached = cache.get(cache_key)
     if cached:
         return {"source": "cache", **cached}
-    result = await asyncio.to_thread(get_futures_signal, symbol)
-    if not result:
+
+    # Fetch from quote-derivative endpoint
+    raw = await asyncio.to_thread(fetch_quote_derivative, symbol)
+    if not raw:
         raise HTTPException(status_code=404, detail=f"No derivative data for {symbol}")
-    cache.set(f"sig:{symbol}", result)
-    return {"source": "live", **result}
+
+    try:
+        stocks = raw.get("stocks", [])
+        fut = next(
+            (s for s in stocks
+             if "Futures" in s.get("metadata", {}).get("instrumentType", "")
+             or "FUT" in s.get("metadata", {}).get("identifier", "")),
+            stocks[0] if stocks else None
+        )
+        if not fut:
+            raise HTTPException(status_code=404, detail=f"No futures contract found for {symbol}")
+
+        meta        = fut.get("metadata", {})
+        ltp         = _f(meta.get("lastPrice", 0))
+        price_chg   = _f(meta.get("change", 0))
+        price_chg_p = _f(meta.get("pChange", 0))
+        oi          = _f(meta.get("openInterest", 0))
+        oi_chg      = _f(meta.get("changeinOpenInterest", 0))
+        oi_chg_p    = ((oi_chg / (oi - oi_chg)) * 100) if (oi - oi_chg) > 0 else 0
+
+        from app.oi_analyzer import _build_signal_row, classify_signal
+        signal = classify_signal(price_chg_p, oi_chg_p)
+        result = _build_signal_row(
+            symbol, ltp, price_chg, price_chg_p,
+            int(oi), int(oi_chg), oi_chg_p, signal
+        )
+        cache.set(cache_key, result, ttl=CACHE_TTL_SECONDS)
+        return {"source": "live", **result}
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Error in /api/signal/{symbol}: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))

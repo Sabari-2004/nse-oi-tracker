@@ -40,6 +40,23 @@ CATEGORY_TO_SIGNAL = {
     "long_unwinding": SIGNAL_LONG_UNWINDING,
 }
 
+# ── Signal classifier (price + OI direction → signal type) ───────────────────
+
+def classify_signal(price_change_pct: float, oi_change_pct: float) -> str:
+    """Classify a signal from price and OI change percentages."""
+    from app.config import PRICE_CHANGE_THRESHOLD, OI_CHANGE_THRESHOLD
+    price_up = price_change_pct >  PRICE_CHANGE_THRESHOLD
+    price_dn = price_change_pct < -PRICE_CHANGE_THRESHOLD
+    oi_up    = oi_change_pct    >  OI_CHANGE_THRESHOLD
+    oi_dn    = oi_change_pct    < -OI_CHANGE_THRESHOLD
+
+    if price_up and oi_up:  return SIGNAL_LONG_BUILDUP
+    if price_dn and oi_up:  return SIGNAL_SHORT_BUILDUP
+    if price_up and oi_dn:  return SIGNAL_SHORT_COVERING
+    if price_dn and oi_dn:  return SIGNAL_LONG_UNWINDING
+    return SIGNAL_NEUTRAL
+
+
 # ── High-confidence scoring ────────────────────────────────────────────────────
 
 def confidence_score(price_chg_p: float, oi_chg_p: float, oi_abs: float) -> int:
