@@ -1,5 +1,5 @@
 # main.py — FastAPI production app for NSE F&O OI Scanner
-# Version 4.0.0 — Production-level error handling, graceful responses
+# Version 4.1.0 — RLock fetcher, per-symbol option chain seeding, /api/debug
 
 import logging
 import asyncio
@@ -99,7 +99,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="NSE F&O OI Scanner",
     description="Production-grade real-time OI signal scanner · Singapore",
-    version="4.0.0",
+    version="4.1.0",
     lifespan=lifespan,
 )
 
