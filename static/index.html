@@ -398,31 +398,43 @@
           <input x-model="chainInput" type="text" placeholder="e.g. RELIANCE"
                  @keydown.enter="openChain(chainInput.toUpperCase())"
                  class="flex-1 bg-gray-800 border border-gray-700 text-sm text-white
-                        placeholder-gray-600 rounded px-3 py-2 focus:outline-none focus:border-brand"/>
+                        placeholder-gray-600 rounded px-3 py-2 focus:outline-none focus:border-brand uppercase"/>
           <button @click="openChain(chainInput.toUpperCase())"
                   class="bg-brand hover:bg-sky-400 text-white text-sm px-3 rounded transition">Go</button>
         </div>
+        <!-- Index quick-buttons -->
+        <div class="grid grid-cols-2 gap-1.5">
+          <template x-for="idx in ['NIFTY','BANKNIFTY','FINNIFTY','MIDCPNIFTY']" :key="idx">
+            <button @click="openChain(idx)"
+                    class="text-xs py-1.5 rounded border transition font-medium"
+                    :class="selectedSymbol===idx
+                      ? 'bg-brand text-white border-brand'
+                      : 'bg-gray-800 text-gray-400 border-gray-700 hover:border-brand hover:text-brand'"
+                    x-text="idx"></button>
+          </template>
+        </div>
         <div class="text-[10px] text-gray-600 uppercase tracking-wider font-semibold">Active Signal Stocks</div>
-        <div class="space-y-0.5 max-h-80 overflow-y-auto scrollbar-thin">
+        <div class="space-y-0.5 max-h-72 overflow-y-auto scrollbar-thin">
           <template x-for="row in signals.slice(0,40)" :key="row.symbol">
             <button @click="openChain(row.symbol)"
                     class="w-full flex items-center justify-between px-3 py-1.5 rounded text-left transition"
                     :class="selectedSymbol===row.symbol ? 'bg-gray-700 border border-gray-600' : 'hover:bg-gray-800'">
               <span class="mono text-xs text-white font-bold" x-text="row.symbol"></span>
-              <div class="flex items-center gap-1.5">
+              <div class="flex items-center gap-1">
                 <span class="text-[10px] mono"
                       :class="row.price_change_pct>=0?'text-green-400':'text-red-400'"
-                      x-text="(row.price_change_pct>=0?'+':'')+row.price_change_pct.toFixed(2)+'%'"></span>
-                <span class="badge"
-                      :class="{
-                        'bg-green-950 text-green-300 border-green-800':  row.signal==='LONG_BUILDUP',
-                        'bg-red-950 text-red-300 border-red-800':        row.signal==='SHORT_BUILDUP',
-                        'bg-yellow-950 text-yellow-300 border-yellow-800':row.signal==='SHORT_COVERING',
-                        'bg-orange-950 text-orange-300 border-orange-800':row.signal==='LONG_UNWINDING',
-                      }" x-text="row.signal_emoji"></span>
+                      x-text="(row.price_change_pct>=0?'+':'')+row.price_change_pct.toFixed(1)+'%'"></span>
+                <span class="badge text-[9px]"
+                      :class="row.confidence_tier==='HIGH'
+                        ? 'bg-green-950 text-green-300 border-green-800'
+                        : 'bg-blue-950 text-blue-300 border-blue-800'"
+                      x-text="row.confidence_tier==='HIGH'?'⭐H':'⭐M'"></span>
               </div>
             </button>
           </template>
+          <div x-show="signals.length===0" class="text-center py-4 text-xs text-gray-600">
+            No active signals yet
+          </div>
         </div>
       </div>
 
@@ -433,13 +445,33 @@
             Option Chain
             <span x-show="selectedSymbol" class="text-brand mono ml-1" x-text="'· ' + selectedSymbol"></span>
           </h3>
-          <span x-show="chainData" class="text-xs text-gray-600">
-            Expiry: <b class="text-gray-300" x-text="chainData?.expiry"></b>
-          </span>
+          <div class="flex items-center gap-2">
+            <span x-show="chainData && !chainData.error" class="text-xs text-gray-600">
+              Expiry: <b class="text-gray-300" x-text="chainData?.expiry"></b>
+            </span>
+            <button x-show="selectedSymbol && !chainLoading"
+                    @click="openChain(selectedSymbol, true)"
+                    class="text-xs text-gray-500 hover:text-brand transition">⟳ Refresh</button>
+          </div>
+        </div>
+
+        <!-- NSE error state -->
+        <div x-show="chainData && chainData.error"
+             class="px-4 py-6 text-center">
+          <div class="text-3xl mb-2">⚠️</div>
+          <div class="text-sm text-amber-400 font-medium" x-text="chainData?.error"></div>
+          <div class="text-xs text-gray-500 mt-2">
+            NSE may be restricting this endpoint from cloud IPs. Try again during peak market hours.
+          </div>
+          <button @click="openChain(selectedSymbol, true)"
+                  class="mt-3 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded border border-gray-700 transition">
+            ⟳ Retry
+          </button>
         </div>
 
         <!-- Stats -->
-        <div x-show="chainData" class="grid grid-cols-3 gap-px bg-gray-800">
+        <div x-show="chainData && !chainData.error && chainData.strikes && chainData.strikes.length > 0"
+             class="grid grid-cols-3 gap-px bg-gray-800">
           <template x-for="stat in chainStats()" :key="stat.label">
             <div class="bg-gray-900 p-3 text-center">
               <div class="text-[10px] text-gray-500 mb-1" x-text="stat.label"></div>
@@ -450,7 +482,8 @@
         </div>
 
         <!-- OI bar chart -->
-        <div x-show="chainData" class="px-4 py-3 border-b border-gray-800">
+        <div x-show="chainData && !chainData.error && chainData.strikes && chainData.strikes.length > 0"
+             class="px-4 py-3 border-b border-gray-800">
           <div class="flex justify-between text-[10px] text-gray-600 mb-1.5">
             <span>CE (Red) vs PE (Green) OI — ATM ± 10 strikes</span>
             <span>
@@ -467,12 +500,13 @@
           <div x-show="!selectedSymbol && !chainLoading"
                class="text-center py-16 text-gray-600">
             <div class="text-4xl mb-2">📈</div>
-            <div class="text-sm">Click any symbol to view its option chain</div>
+            <div class="text-sm">Type a symbol above or click a signal stock</div>
+            <div class="text-xs mt-2 text-gray-700">Supports NIFTY, BANKNIFTY, FINNIFTY, and all F&O stocks</div>
           </div>
           <div x-show="chainLoading" class="text-center py-10 text-gray-500 blink text-sm">
             Loading chain…
           </div>
-          <template x-if="chainData && !chainLoading">
+          <template x-if="chainData && !chainData.error && chainData.strikes && chainData.strikes.length > 0 && !chainLoading">
             <table class="w-full text-[11px]">
               <thead class="sticky top-0 bg-gray-950">
                 <tr>
@@ -906,20 +940,37 @@ function scanner() {
     },
 
     /* ── option chain ── */
-    async openChain(sym) {
-      if (!sym) return;
+    async openChain(sym, refresh=false) {
+      if (!sym || sym.trim() === '') return;
+      sym = sym.toUpperCase().trim();
       this.selectedSymbol = sym;
-      this.activeTab = 'chain';
-      if (this.chainData?.symbol === sym) return;
-      this.chainLoading = true; this.chainData = null;
+      this.chainInput     = sym;
+      this.activeTab      = 'chain';
+
+      // Skip re-fetch unless refresh forced or different symbol
+      if (!refresh && this.chainData?.symbol === sym && !this.chainData.error) return;
+
+      this.chainLoading = true;
+      this.chainData    = null;
+      this.error        = '';
+
       try {
-        const r = await fetch('/api/option-chain/' + sym);
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        this.chainData = await r.json();
-        this.$nextTick(() => this.drawChart(this.chainData));
+        const url = '/api/option-chain/' + sym + (refresh ? '?refresh=true' : '');
+        const r   = await fetch(url);
+        // Always 200 now — error info is in the JSON body
+        const data = await r.json();
+        this.chainData = data;
+        if (data.error) {
+          // Error shown inline in the panel — not as a banner
+          console.warn('Chain error for', sym, ':', data.error);
+        } else if (data.strikes && data.strikes.length > 0) {
+          this.$nextTick(() => this.drawChart(data));
+        }
       } catch(e) {
-        this.error = 'Chain load failed for ' + sym + ': ' + e.message;
-      } finally { this.chainLoading = false; }
+        this.chainData = { symbol: sym, error: 'Network error: ' + e.message, strikes: [] };
+      } finally {
+        this.chainLoading = false;
+      }
     },
 
     chainStats() {
