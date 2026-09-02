@@ -1129,7 +1129,7 @@ function scanner() {
     saveTrades() {
       const today = this.todayIST();
       localStorage.setItem(STORAGE_DATE, today);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.trades));
+      const payload = JSON.stringify(this.trades); localStorage.setItem(`${STORAGE_KEY}:${today}`, payload); localStorage.setItem(STORAGE_KEY, payload);
     },
 
     loadTrades() {
@@ -1143,7 +1143,7 @@ function scanner() {
         return;
       }
       try {
-        this.trades = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        this.trades = JSON.parse(localStorage.getItem(`${STORAGE_KEY}:${today}`) || localStorage.getItem(STORAGE_KEY) || '[]');
       } catch { this.trades = []; }
     },
 
