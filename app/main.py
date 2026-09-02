@@ -3,6 +3,7 @@
 
 import logging
 import asyncio
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
@@ -39,6 +40,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
+STALE_SIGNAL_GRACE_SECONDS = 180
+_last_good_signals: list[dict] = []
+_last_good_signals_at = 0.0
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -53,7 +57,15 @@ def is_market_open() -> bool:
 
 
 def _refresh_signals() -> list[dict]:
+    global _last_good_signals, _last_good_signals_at
     signals = scan_all_fno_realtime()
+    now = time.monotonic()
+    if signals:
+        _last_good_signals = signals
+        _last_good_signals_at = now
+    elif _last_good_signals and now - _last_good_signals_at <= STALE_SIGNAL_GRACE_SECONDS:
+        logger.warning("Empty scan received; serving last valid signals during grace period")
+        signals = _last_good_signals
     cache.set("all_signals", signals, ttl=CACHE_TTL_SECONDS)
     h = sum(1 for s in signals if s.get("confidence_tier") == "HIGH")
     m = sum(1 for s in signals if s.get("confidence_tier") == "MEDIUM")
