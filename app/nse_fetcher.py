@@ -236,6 +236,8 @@ class NSESession:
 
 # ── Singleton ──────────────────────────────────────────────────────────────────
 _nse = NSESession()
+_price_snapshots: dict[str, float] = {}
+_price_snapshot_lock = RLock()
 
 
 # ── Public data functions ──────────────────────────────────────────────────────
@@ -252,8 +254,29 @@ def fetch_all_fno_oi_change() -> list[dict]:
     if not data:
         return []
     rows = data.get("data", [])
-    logger.info(f"OI spurts: {len(rows)} F&O rows received")
-    return rows
+    enriched_rows: list[dict] = []
+    with _price_snapshot_lock:
+        for row in rows:
+            symbol = str(row.get("symbol") or row.get("underlying") or "").upper().strip()
+            current_price = row.get("underlyingValue") or row.get("lastPrice") or row.get("ltp")
+            try:
+                current_price = float(current_price or 0)
+            except (TypeError, ValueError):
+                current_price = 0.0
+
+            enriched = dict(row)
+            previous_price = _price_snapshots.get(symbol) if symbol else None
+            if symbol and current_price > 0:
+                if previous_price and previous_price > 0:
+                    enriched["ltp"] = current_price
+                    enriched["change"] = current_price - previous_price
+                    enriched["pChange"] = ((current_price - previous_price) / previous_price) * 100
+                    enriched["price_source"] = "rolling_underlying_snapshot"
+                _price_snapshots[symbol] = current_price
+            enriched_rows.append(enriched)
+
+    logger.info(f"OI spurts: {len(enriched_rows)} F&O rows received")
+    return enriched_rows
 
 
 def _fetch_option_chain(symbol: str, market_type: str) -> dict | None:
