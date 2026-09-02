@@ -337,16 +337,22 @@ async def single_signal(symbol: str):
 
 @app.get("/api/debug")
 async def debug():
-    """
-    Diagnostic endpoint — tests NSE connectivity for all key endpoints.
-    Use to diagnose why signals or option chain is not working.
-    """
-    result = await asyncio.to_thread(test_nse_connectivity)
-    cached_signals = cache.get("all_signals") or []
+    """Diagnostic endpoint — NSE connectivity + raw sample data."""
+    from app.nse_fetcher import fetch_all_fno_oi_change
+    conn   = await asyncio.to_thread(test_nse_connectivity)
+    cached = cache.get("all_signals") or []
+
+    # Get raw rows to inspect field names
+    raw_rows = await asyncio.to_thread(fetch_all_fno_oi_change)
+    sample   = raw_rows[:3] if raw_rows else []
+
     return {
         "timestamp":      datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST"),
         "market_open":    is_market_open(),
-        "version":        "4.0.0",
-        "cached_signals": len(cached_signals),
-        "nse_endpoints":  result,
+        "version":        "4.1.0",
+        "cached_signals": len(cached),
+        "raw_rows_count": len(raw_rows),
+        "nse_endpoints":  conn,
+        "sample_row":     sample[0] if sample else {},   # ← shows real field names
+        "sample_rows":    sample,
     }
