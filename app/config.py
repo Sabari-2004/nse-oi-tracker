@@ -4,17 +4,16 @@
 INDICES = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
 
 # ─── Signal classification thresholds ────────────────────────────────────────
-# Minimum % price move to be "rising" or "falling" (higher = less noise)
-PRICE_CHANGE_THRESHOLD = 0.40    # 0.40% — filters out micro-moves
+# Minimum % price move to be "rising" or "falling"
+PRICE_CHANGE_THRESHOLD = 0.10    # 0.10% — catches meaningful intraday moves
 
 # Minimum % OI change to be significant
-OI_CHANGE_THRESHOLD    = 3.0     # 3.0% — filters out noise OI fluctuations
+OI_CHANGE_THRESHOLD    = 0.50    # 0.50% — catches real OI buildup/unwinding
 
 # ─── Confidence tiers (multi-factor score 0–100) ─────────────────────────────
-# Score computed from: price strength + OI strength + absolute OI (liquidity)
-CONFIDENCE_HIGH   = 65   # ⭐⭐⭐  — only these are shown by default
-CONFIDENCE_MEDIUM = 40   # ⭐⭐    — shown if user relaxes filter
-# Below MEDIUM → filtered out completely
+CONFIDENCE_HIGH   = 45   # ⭐⭐⭐  — strong signal
+CONFIDENCE_MEDIUM = 20   # ⭐⭐    — moderate signal
+# Below MEDIUM → filtered out
 
 # ─── Liquidity filter ─────────────────────────────────────────────────────────
 # Minimum absolute OI in contracts (removes penny/illiquid F&O stocks)

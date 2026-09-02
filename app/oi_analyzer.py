@@ -162,38 +162,57 @@ def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p, si
 def _parse_row(row: dict) -> dict | None:
     """
     Parse one row from live-analysis-oi-spurts-underlyings.
-    NSE field names across versions (we try all):
-      Symbol:     underlying | symbol
-      LTP:        ltp | lastPrice | ltP
-      Price chg:  pChange | perChange | changePer | change_p
-      Price abs:  change | priceChange
-      OI:         oi | openInterest
-      OI chg:     oiChange | changeinOpenInterest
-      OI chg %:   oiChangePct | perOIchange | oiChangePer | changeOI_pct
+    Handles ALL known NSE field name variants (NSE changes names without notice).
     """
     sym = _symbol(row)
     if not sym:
         return None
 
-    ltp         = _f(row.get("ltp") or row.get("lastPrice") or row.get("ltP") or 0)
-    price_chg_p = _f(row.get("pChange") or row.get("perChange") or
-                     row.get("changePer") or row.get("change_p") or 0)
-    price_chg   = _f(row.get("change") or row.get("priceChange") or 0)
-    oi          = _f(row.get("oi") or row.get("openInterest") or row.get("OI") or 0)
-    oi_chg      = _f(row.get("oiChange") or row.get("changeinOpenInterest") or row.get("COI") or 0)
-    oi_chg_p    = _f(row.get("oiChangePct") or row.get("perOIchange") or
-                     row.get("oiChangePer") or row.get("changeOI_pct") or 0)
+    ltp = _f(
+        row.get("ltp") or row.get("lastPrice") or row.get("ltP") or
+        row.get("LTP") or row.get("price") or 0
+    )
 
-    # Derive OI change % if missing but we have OI and OI change
+    price_chg_p = _f(
+        row.get("pChange") or row.get("perChange") or
+        row.get("changePer") or row.get("change_p") or
+        row.get("perchange") or row.get("pchange") or
+        row.get("percentChange") or 0
+    )
+
+    price_chg = _f(
+        row.get("change") or row.get("priceChange") or
+        row.get("netChange") or 0
+    )
+
+    oi = _f(
+        row.get("oi") or row.get("openInterest") or
+        row.get("OI") or row.get("openinterest") or 0
+    )
+
+    oi_chg = _f(
+        row.get("oiChange") or row.get("changeinOpenInterest") or
+        row.get("COI") or row.get("changeInOI") or
+        row.get("oichange") or 0
+    )
+
+    oi_chg_p = _f(
+        row.get("oiChangePct") or row.get("perOIchange") or
+        row.get("oiChangePer") or row.get("changeOI_pct") or
+        row.get("perOIChange") or row.get("oiChangePercent") or
+        row.get("pOIchng") or row.get("oichngper") or 0
+    )
+
+    # Derive OI% if we have absolute OI and OI change
     if oi_chg_p == 0 and oi_chg != 0 and (oi - oi_chg) > 0:
         oi_chg_p = (oi_chg / (oi - oi_chg)) * 100
 
-    # Skip bad data
+    # Skip rows with no price data
     if ltp == 0:
         return None
 
-    # Skip illiquid stocks
-    if 0 < oi < MIN_OI_ABSOLUTE:
+    # Skip illiquid stocks (min OI check — but only if OI data exists)
+    if oi > 0 and oi < MIN_OI_ABSOLUTE:
         return None
 
     signal = classify_signal(price_chg_p, oi_chg_p)
