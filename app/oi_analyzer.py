@@ -308,7 +308,9 @@ def _parse_option_chain(data: dict, symbol: str) -> dict:
         filtered   = data.get("filtered", {}) or {}
         exp_dates  = records.get("expiryDates", [])
         atm_strike = _f(records.get("underlyingValue", 0))
-        all_data   = filtered.get("data", [])
+        # NSE v3 returns the selected expiry under records.data and may omit
+        # filtered.data; retain compatibility with the legacy response shape.
+        all_data   = filtered.get("data") or records.get("data", [])
 
         total_ce = total_pe = 0
         strikes: list[dict] = []

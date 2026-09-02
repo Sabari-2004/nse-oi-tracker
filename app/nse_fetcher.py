@@ -15,6 +15,7 @@
 import time
 import logging
 from threading import RLock
+from urllib.parse import quote
 from curl_cffi import requests as cffi_requests
 from app.config import SESSION_REFRESH_SECONDS
 
@@ -255,24 +256,43 @@ def fetch_all_fno_oi_change() -> list[dict]:
     return rows
 
 
+def _fetch_option_chain(symbol: str, market_type: str) -> dict | None:
+    """Fetch an option chain using NSE's current v3 API and nearest expiry."""
+    symbol = symbol.upper().strip()
+    encoded_symbol = quote(symbol, safe="")
+    contract_info = _nse.get(
+        f"{NSE_BASE}/api/option-chain-contract-info?symbol={encoded_symbol}",
+        referer="https://www.nseindia.com/option-chain",
+    )
+    expiry_dates = (contract_info or {}).get("expiryDates", [])
+    if not expiry_dates:
+        logger.warning("No expiry dates returned for option chain %s", symbol)
+        return None
+    expiry = quote(str(expiry_dates[0]), safe="")
+    api_url = (
+        f"{NSE_BASE}/api/option-chain-v3?type={market_type}"
+        f"&symbol={encoded_symbol}&expiry={expiry}"
+    )
+    seed_url = (
+        f"{NSE_BASE}/get-quotes/derivatives?symbol={encoded_symbol}"
+        if market_type == "Equity" else f"{NSE_BASE}/option-chain"
+    )
+    return _nse.get_seeded(
+        seed_url=seed_url,
+        seed_referer="https://www.nseindia.com/option-chain",
+        api_url=api_url,
+        api_referer="https://www.nseindia.com/option-chain",
+    )
+
+
 def fetch_option_chain_index(symbol: str) -> dict | None:
     """Option chain for NIFTY / BANKNIFTY / FINNIFTY / MIDCPNIFTY."""
-    return _nse.get_seeded(
-        seed_url     = f"{NSE_BASE}/option-chain",
-        seed_referer = "https://www.nseindia.com/market-data/equity-derivatives-watch",
-        api_url      = f"{NSE_BASE}/api/option-chain-indices?symbol={symbol}",
-        api_referer  = "https://www.nseindia.com/option-chain",
-    )
+    return _fetch_option_chain(symbol, "Indices")
 
 
 def fetch_option_chain_equity(symbol: str) -> dict | None:
     """Option chain for individual F&O stocks (RELIANCE, TCS etc.)."""
-    return _nse.get_seeded(
-        seed_url     = f"{NSE_BASE}/get-quotes/derivatives?symbol={symbol}",
-        seed_referer = "https://www.nseindia.com/market-data/equity-derivatives-watch",
-        api_url      = f"{NSE_BASE}/api/option-chain-equities?symbol={symbol}",
-        api_referer  = "https://www.nseindia.com/option-chain",
-    )
+    return _fetch_option_chain(symbol, "Equity")
 
 
 def fetch_quote_derivative(symbol: str) -> dict | None:
