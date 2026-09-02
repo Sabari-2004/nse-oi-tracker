@@ -905,6 +905,7 @@ function scanner() {
     tickClock() {
       const now = new Date();
       this.clock = now.toLocaleTimeString('en-IN', {timeZone:'Asia/Kolkata', hour:'2-digit', minute:'2-digit', second:'2-digit'}) + ' IST';
+      this.ensureTradeDay();
       const ist  = new Date(now.toLocaleString('en-US', {timeZone:'Asia/Kolkata'}));
       const h = ist.getHours(), m = ist.getMinutes(), d = ist.getDay();
       this.marketOpen = d >= 1 && d <= 5 && ((h > 9)||(h===9&&m>=15)) && ((h < 15)||(h===15&&m<=30));
@@ -1114,14 +1115,25 @@ function scanner() {
     },
 
     /* localStorage persistence — auto-clear if date changed */
+    todayIST() {
+      return new Date().toLocaleDateString('en-CA', {timeZone:'Asia/Kolkata'});
+    },
+    ensureTradeDay() {
+      const today = this.todayIST();
+      if (localStorage.getItem(STORAGE_DATE) !== today) {
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.setItem(STORAGE_DATE, today);
+        this.trades = [];
+      }
+    },
     saveTrades() {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = this.todayIST();
       localStorage.setItem(STORAGE_DATE, today);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.trades));
     },
 
     loadTrades() {
-      const today   = new Date().toISOString().slice(0, 10);
+      const today   = this.todayIST();
       const stored  = localStorage.getItem(STORAGE_DATE);
       if (stored !== today) {
         // New day — clear old trades
