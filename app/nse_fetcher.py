@@ -1,46 +1,62 @@
-# nse_fetcher.py — Production NSE data fetcher (Singapore)
-# Uses cloudscraper for Cloudflare bypass.
+# nse_fetcher.py — Production NSE fetcher using curl-cffi Chrome impersonation
 #
-# Key insight: NSE checks the Referer + cookies per API call.
-# Option chain APIs need a FRESH per-symbol page visit immediately
-# before the API call to get the right cookies — done via _get_seeded().
+# WHY curl-cffi?
+# NSE uses Akamai Bot Manager (+ Cloudflare) for bot protection.
+# Both check the TLS fingerprint (JA3 hash) at the TCP level — before
+# any cookies or JS challenge. Standard requests/urllib3/cloudscraper
+# produce a non-browser JA3 hash that Akamai instantly flags as a bot.
+#
+# curl-cffi uses Chrome's own BoringSSL library to produce an IDENTICAL
+# TLS fingerprint to a real Chrome browser. Akamai cannot distinguish
+# our requests from a real user. This fixes option chain 403/HTML blocks.
+#
+# Reference: https://github.com/yifeikong/curl-cffi
 
 import time
 import logging
-import cloudscraper
-from threading import RLock          # Re-entrant so _get_seeded can call _raw_get
+from threading import RLock
+from curl_cffi import requests as cffi_requests
 from app.config import SESSION_REFRESH_SECONDS
 
 logger   = logging.getLogger(__name__)
 NSE_BASE = "https://www.nseindia.com"
 
-# ── Headers for page navigation (HTML seed visits) ───────────────────────────
-NAV_HEADERS = {
-    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Sec-Fetch-Dest":  "document",
-    "Sec-Fetch-Mode":  "navigate",
-    "Sec-Fetch-Site":  "none",
-    "Cache-Control":   "no-cache",
-    "Connection":      "keep-alive",
+# Chrome impersonation target (curl-cffi supports many versions)
+CHROME = "chrome120"
+
+# Base headers for all requests (realistic Chrome headers)
+BASE_HEADERS = {
+    "Accept-Language":           "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding":           "gzip, deflate, br",
+    "Cache-Control":             "no-cache",
+    "Pragma":                    "no-cache",
+    "Sec-Ch-Ua":                 '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    "Sec-Ch-Ua-Mobile":         "?0",
+    "Sec-Ch-Ua-Platform":       '"Windows"',
     "Upgrade-Insecure-Requests": "1",
+    "User-Agent":                ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                  "Chrome/120.0.0.0 Safari/537.36"),
 }
 
-# ── Headers for JSON API calls ────────────────────────────────────────────────
-API_HEADERS = {
+# JSON API-specific headers (added on top of BASE_HEADERS for API calls)
+API_EXTRA = {
     "Accept":           "application/json, text/plain, */*",
-    "Accept-Language":  "en-US,en;q=0.9",
-    "Accept-Encoding":  "gzip, deflate, br",
     "X-Requested-With": "XMLHttpRequest",
     "Sec-Fetch-Dest":   "empty",
     "Sec-Fetch-Mode":   "cors",
     "Sec-Fetch-Site":   "same-origin",
-    "Cache-Control":    "no-cache",
-    "Connection":       "keep-alive",
 }
 
-# ── Initial session seed sequence ─────────────────────────────────────────────
+# Page navigation headers (for seed visits — looks like a real browser navigation)
+NAV_EXTRA = {
+    "Accept":         "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+}
+
+# Seed pages visited on session startup
 SEED_PAGES = [
     ("https://www.nseindia.com/",
      "https://www.google.com/"),
@@ -55,83 +71,97 @@ SEED_PAGES = [
 
 class NSESession:
     """
-    Thread-safe cloudscraper session for NSE.
+    Chrome-impersonating NSE session using curl-cffi.
 
-    Uses RLock (re-entrant) so inner _raw_get calls from _get_seeded
-    don't deadlock against themselves.
+    curl-cffi produces the exact same TLS fingerprint (JA3 hash) as
+    Chrome 120. This bypasses Akamai Bot Manager at the TLS level,
+    before any cookie or JavaScript challenge is even considered.
 
     Session lifecycle:
-    - Built on first use by visiting 4 seed pages (2s gap each)
+    - Built on first use (visits 4 seed pages with 2s delays)
     - Auto-refreshed every SESSION_REFRESH_SECONDS (10 min)
-    - Re-seeded on 401/403/429 responses (cookie expired)
+    - Re-seeded on 401/403/429 (stale cookies)
     """
 
     def __init__(self):
-        self._sc        = None
-        self._lock      = RLock()        # re-entrant — critical for _get_seeded
+        self._sess      = None
+        self._lock      = RLock()
         self._last_init = 0.0
 
-    # ── Internal: build a fresh scraper session ────────────────────────────────
+    def _new_session(self) -> cffi_requests.Session:
+        """Create a fresh curl-cffi session impersonating Chrome."""
+        s = cffi_requests.Session(impersonate=CHROME)
+        s.headers.update(BASE_HEADERS)
+        return s
 
-    def _build(self) -> cloudscraper.CloudScraper:
-        logger.info("Building NSE cloudscraper session…")
-        sc = cloudscraper.create_scraper(
-            browser={"browser": "chrome", "platform": "windows", "mobile": False}
-        )
+    def _build(self):
+        """Seed a new session by visiting NSE pages in browser-like order."""
+        logger.info("Building NSE Chrome-impersonation session…")
+        sess = self._new_session()
+
         for url, referer in SEED_PAGES:
-            sc.headers.update({**NAV_HEADERS, "Referer": referer})
+            sess.headers.update({**NAV_EXTRA, "Referer": referer})
             try:
-                r = sc.get(url, timeout=20)
-                logger.info(f"  seed {r.status_code} → {url}")
+                r = sess.get(url, timeout=20)
+                logger.info(f"  seed {r.status_code} {url}")
             except Exception as e:
                 logger.warning(f"  seed failed {url}: {e}")
             time.sleep(2.2)
-        logger.info("NSE session ready.")
-        return sc
+
+        # Reset to base headers after seeding
+        sess.headers.update(BASE_HEADERS)
+        logger.info("NSE session ready (Chrome TLS fingerprint).")
+        return sess
 
     def _ensure(self):
-        """Call inside lock. Rebuild if session missing or stale."""
+        """Rebuild session if missing or older than SESSION_REFRESH_SECONDS."""
         now = time.time()
-        if self._sc is None or (now - self._last_init) > SESSION_REFRESH_SECONDS:
-            self._sc        = self._build()
+        if self._sess is None or (now - self._last_init) > SESSION_REFRESH_SECONDS:
+            self._sess      = self._build()
             self._last_init = time.time()
 
     def _safe_json(self, resp, label: str):
-        if resp is None:
+        """Parse JSON from response. Returns None if body is empty or HTML."""
+        if resp is None or not resp.content:
+            logger.warning(f"Empty response: {label}")
             return None
-        if not resp.content:
-            logger.warning(f"Empty body: {label}")
-            return None
-        ct = resp.headers.get("Content-Type", "")
+        ct = resp.headers.get("content-type", "")
         if "html" in ct.lower():
-            logger.warning(f"HTML body (blocked by Cloudflare?): {label} status={resp.status_code}")
+            snip = resp.text[:150].replace("\n", " ")
+            logger.warning(f"HTML body from {label}: {snip!r}")
             return None
         try:
             return resp.json()
         except Exception as e:
-            logger.warning(f"JSON parse fail: {label}: {e}")
+            logger.warning(f"JSON parse error {label}: {e}")
             return None
 
-    # ── Internal: raw GET (must hold lock when called) ─────────────────────────
-
-    def _raw_get(self, url: str, referer: str, is_page: bool = False) -> object:
-        """Execute one HTTP GET. Returns response object or None on failure."""
-        headers = NAV_HEADERS if is_page else API_HEADERS
-        self._sc.headers.update({**headers, "Referer": referer})
+    def _api_get(self, url: str, referer: str):
+        """Raw API GET with JSON headers. Must hold lock."""
+        self._sess.headers.update({**BASE_HEADERS, **API_EXTRA, "Referer": referer})
         try:
-            return self._sc.get(url, timeout=25)
+            return self._sess.get(url, timeout=25)
         except Exception as e:
-            logger.error(f"Request error: {url}: {e}")
+            logger.error(f"Request error {url}: {e}")
             return None
 
-    # ── Public: standard JSON GET ──────────────────────────────────────────────
+    def _nav_get(self, url: str, referer: str):
+        """Raw navigation GET (page visit). Must hold lock."""
+        self._sess.headers.update({**BASE_HEADERS, **NAV_EXTRA, "Referer": referer})
+        try:
+            return self._sess.get(url, timeout=20)
+        except Exception as e:
+            logger.warning(f"Nav error {url}: {e}")
+            return None
+
+    # ── Public API ─────────────────────────────────────────────────────────────
 
     def get(self, url: str, referer: str, retries: int = 2) -> dict | None:
-        """Fetch JSON from NSE API. Auto-retries with session rebuild on 4xx."""
+        """Standard JSON API fetch with auto-retry on 4xx."""
         with self._lock:
             self._ensure()
             for attempt in range(retries):
-                resp = self._raw_get(url, referer)
+                resp = self._api_get(url, referer)
                 if resp is None:
                     time.sleep(2)
                     continue
@@ -139,77 +169,79 @@ class NSESession:
                 if code == 200:
                     return self._safe_json(resp, url)
                 if code in (401, 403, 429):
-                    logger.warning(f"HTTP {code} (attempt {attempt+1}) — rebuilding session: {url}")
-                    self._sc        = self._build()
+                    logger.warning(f"HTTP {code} attempt {attempt+1} — rebuilding session: {url}")
+                    self._sess      = self._build()
                     self._last_init = time.time()
-                    time.sleep(3)
+                    time.sleep(3 * (attempt + 1))
                 elif code == 404:
-                    logger.warning(f"HTTP 404 — endpoint removed: {url}")
+                    logger.warning(f"HTTP 404 (endpoint removed): {url}")
                     return None
                 else:
                     logger.warning(f"HTTP {code}: {url}")
                     return None
             return None
 
-    # ── Public: page-seeded GET (visits a page first, then calls API) ──────────
-
     def get_seeded(self, seed_url: str, seed_referer: str,
                    api_url: str, api_referer: str,
-                   retries: int = 2) -> dict | None:
+                   retries: int = 3) -> dict | None:
         """
-        Visit seed_url first (to set symbol-specific cookies), then
-        call api_url. Both inside the same lock — no deadlock because RLock.
+        Visit seed_url first (sets fresh per-symbol cookies), then call api_url.
+        Both in one lock acquisition — safe because RLock is re-entrant.
 
-        Used for option chain: NSE requires a fresh page visit per symbol
-        before the API call will return JSON (otherwise returns HTML/403).
+        Critical for option chain: NSE checks that the exact symbol page was
+        visited right before the option chain API call.
         """
         with self._lock:
             self._ensure()
             for attempt in range(retries):
-                # 1. Visit the seed page (sets fresh cookies for this symbol)
-                logger.info(f"  option-chain seed: {seed_url}")
-                seed_resp = self._raw_get(seed_url, seed_referer, is_page=True)
-                if seed_resp is not None:
-                    logger.info(f"  seed status: {seed_resp.status_code}")
+                # Step 1: Visit the seed page (browser navigation)
+                logger.info(f"  seeding for option chain: {seed_url}")
+                seed_resp = self._nav_get(seed_url, seed_referer)
+                sc = seed_resp.status_code if seed_resp else "failed"
+                logger.info(f"  seed status: {sc}")
                 time.sleep(1.5)
 
-                # 2. Now call the API
-                api_resp = self._raw_get(api_url, api_referer)
+                # Step 2: Call the JSON API
+                api_resp = self._api_get(api_url, api_referer)
                 if api_resp is None:
                     time.sleep(2)
                     continue
+
                 code = api_resp.status_code
                 if code == 200:
                     data = self._safe_json(api_resp, api_url)
                     if data is not None:
                         return data
-                    # Got 200 but HTML body — session stale, rebuild
+                    # 200 but HTML — session stale, rebuild
                     logger.warning("200 but HTML body — rebuilding session")
-                    self._sc        = self._build()
-                    self._last_init = time.time()
-                elif code in (401, 403, 429):
-                    logger.warning(f"HTTP {code} on option-chain attempt {attempt+1} — rebuilding")
-                    self._sc        = self._build()
+                    self._sess      = self._build()
                     self._last_init = time.time()
                     time.sleep(3)
+                elif code in (401, 403, 429):
+                    logger.warning(f"HTTP {code} option-chain attempt {attempt+1} — rebuilding")
+                    self._sess      = self._build()
+                    self._last_init = time.time()
+                    time.sleep(4 * (attempt + 1))
+                elif code == 404:
+                    logger.warning(f"HTTP 404 option-chain: {api_url}")
+                    return None
                 else:
-                    logger.warning(f"HTTP {code} on option-chain: {api_url}")
+                    logger.warning(f"HTTP {code} option-chain: {api_url}")
                     return None
 
             logger.error(f"Option chain failed after {retries} attempts: {api_url}")
             return None
 
 
-# ── Singleton ─────────────────────────────────────────────────────────────────
+# ── Singleton ──────────────────────────────────────────────────────────────────
 _nse = NSESession()
 
 
-# ── Public fetch functions ─────────────────────────────────────────────────────
+# ── Public data functions ──────────────────────────────────────────────────────
 
 def fetch_all_fno_oi_change() -> list[dict]:
     """
     Fetch OI + price data for ALL F&O underlyings.
-    Endpoint: live-analysis-oi-spurts-underlyings
     CONFIRMED WORKING from Singapore.
     """
     data = _nse.get(
@@ -219,66 +251,59 @@ def fetch_all_fno_oi_change() -> list[dict]:
     if not data:
         return []
     rows = data.get("data", [])
-    logger.info(f"OI spurts: {len(rows)} F&O rows")
+    logger.info(f"OI spurts: {len(rows)} F&O rows received")
     return rows
 
 
 def fetch_option_chain_index(symbol: str) -> dict | None:
-    """
-    Option chain for NIFTY / BANKNIFTY / FINNIFTY / MIDCPNIFTY.
-    Visits the generic option-chain page first to refresh cookies.
-    """
+    """Option chain for NIFTY / BANKNIFTY / FINNIFTY / MIDCPNIFTY."""
     return _nse.get_seeded(
         seed_url     = f"{NSE_BASE}/option-chain",
         seed_referer = "https://www.nseindia.com/market-data/equity-derivatives-watch",
         api_url      = f"{NSE_BASE}/api/option-chain-indices?symbol={symbol}",
-        api_referer  = f"{NSE_BASE}/option-chain",
+        api_referer  = "https://www.nseindia.com/option-chain",
     )
 
 
 def fetch_option_chain_equity(symbol: str) -> dict | None:
-    """
-    Option chain for individual F&O stocks (e.g. RELIANCE, TCS).
-    Visits the derivatives quote page for that symbol first,
-    then calls the option-chain API.
-    """
+    """Option chain for individual F&O stocks (RELIANCE, TCS etc.)."""
     return _nse.get_seeded(
         seed_url     = f"{NSE_BASE}/get-quotes/derivatives?symbol={symbol}",
-        seed_referer = f"{NSE_BASE}/market-data/equity-derivatives-watch",
+        seed_referer = "https://www.nseindia.com/market-data/equity-derivatives-watch",
         api_url      = f"{NSE_BASE}/api/option-chain-equities?symbol={symbol}",
-        api_referer  = f"{NSE_BASE}/option-chain",
+        api_referer  = "https://www.nseindia.com/option-chain",
     )
 
 
 def fetch_quote_derivative(symbol: str) -> dict | None:
-    """Futures quote for a specific symbol — price, OI, expiry."""
+    """Futures quote for a specific symbol — live price, OI, expiry."""
     return _nse.get_seeded(
         seed_url     = f"{NSE_BASE}/get-quotes/derivatives?symbol={symbol}",
-        seed_referer = f"{NSE_BASE}/market-data/live-equity-market",
+        seed_referer = "https://www.nseindia.com/market-data/live-equity-market",
         api_url      = f"{NSE_BASE}/api/quote-derivative?symbol={symbol}",
-        api_referer  = f"{NSE_BASE}/get-quotes/derivatives?symbol={symbol}",
+        api_referer  = f"https://www.nseindia.com/get-quotes/derivatives?symbol={symbol}",
     )
 
 
 def test_nse_connectivity() -> dict:
-    """Diagnostic: test all key NSE endpoints. Call via /api/debug."""
-    out = {}
+    """Diagnostic — test all key endpoints. Accessible via /api/debug."""
+    results = {}
     tests = [
-        ("oi_spurts",     fetch_all_fno_oi_change),
-        ("chain_nifty",   lambda: fetch_option_chain_index("NIFTY")),
-        ("chain_equity",  lambda: fetch_option_chain_equity("RELIANCE")),
-        ("quote_deriv",   lambda: fetch_quote_derivative("RELIANCE")),
+        ("oi_spurts",    lambda: fetch_all_fno_oi_change()),
+        ("chain_nifty",  lambda: fetch_option_chain_index("NIFTY")),
+        ("chain_equity", lambda: fetch_option_chain_equity("RELIANCE")),
+        ("quote_deriv",  lambda: fetch_quote_derivative("RELIANCE")),
     ]
     for name, fn in tests:
         try:
             data = fn()
             if data is None:
-                out[name] = "blocked/empty"
+                results[name] = "blocked/empty"
             elif isinstance(data, list):
-                out[name] = f"ok ({len(data)} rows)"
+                results[name] = f"ok ({len(data)} rows)"
             else:
-                keys = list(data.keys())[:4]
-                out[name] = f"ok — keys: {keys}"
+                keys = list(data.keys())[:5]
+                results[name] = f"ok — keys: {keys}"
         except Exception as e:
-            out[name] = f"error: {e}"
-    return out
+            results[name] = f"error: {e}"
+    return results
