@@ -206,7 +206,8 @@ def _parse_row(row: dict) -> dict | None:
 
     ltp = _f(
         row.get("ltp") or row.get("lastPrice") or row.get("ltP") or
-        row.get("LTP") or row.get("price") or 0
+        row.get("LTP") or row.get("price") or
+        row.get("underlyingValue") or 0
     )
 
     price_chg_p = _f(
@@ -221,11 +222,16 @@ def _parse_row(row: dict) -> dict | None:
         row.get("netChange") or 0
     )
 
-    oi, oi_field = _first_numeric(row, ("oi", "openInterest", "OI", "openinterest"))
-    oi_chg, oi_chg_field = _first_numeric(row, ("oiChange", "changeinOpenInterest", "COI"))
+    oi, oi_field = _first_numeric(row, (
+        "oi", "openInterest", "OI", "openinterest", "latestOI", "totalOI",
+    ))
+    oi_chg, oi_chg_field = _first_numeric(row, (
+        "oiChange", "changeinOpenInterest", "changeInOI", "COI",
+    ))
     oi_chg_p, oi_chg_p_field = _first_numeric(row, (
         "oiChangePct", "perOIchange", "oiChangePer", "changeOI_pct",
         "perOIChange", "oiChangePercent", "pOIchng", "oichngper",
+        "oiChangePercentage", "changeInOIPercent", "pOIChange",
     ))
     _field_usage[sym] = {
         "oi_field": oi_field,
@@ -311,12 +317,12 @@ def _parse_buildup_row(row: dict, signal: str) -> dict | None:
     sym = _symbol(row)
     if not sym:
         return None
-    ltp         = _f(row.get("ltp") or row.get("lastPrice") or 0)
-    price_chg_p = _f(row.get("pChange") or row.get("perChange") or 0)
-    price_chg   = _f(row.get("change") or 0)
-    oi          = _f(row.get("oi") or row.get("openInterest") or 0)
-    oi_chg      = _f(row.get("oiChange") or row.get("changeinOpenInterest") or 0)
-    oi_chg_p    = _f(row.get("oiChangePct") or row.get("perOIchange") or 0)
+    ltp         = _f(row.get("ltp") or row.get("lastPrice") or row.get("underlyingValue") or 0)
+    price_chg_p = _f(row.get("pChange") or row.get("perChange") or row.get("percentChange") or 0)
+    price_chg   = _f(row.get("change") or row.get("priceChange") or row.get("netChange") or 0)
+    oi          = _f(row.get("oi") or row.get("openInterest") or row.get("latestOI") or 0)
+    oi_chg      = _f(row.get("oiChange") or row.get("changeinOpenInterest") or row.get("changeInOI") or 0)
+    oi_chg_p    = _f(row.get("oiChangePct") or row.get("perOIchange") or row.get("oiChangePercent") or 0)
     if ltp == 0:
         return None
     return _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p, signal)

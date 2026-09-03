@@ -144,7 +144,7 @@ async def health():
         "time_ist":    now.strftime("%Y-%m-%d %H:%M:%S IST"),
         "market_open": is_market_open(),
         "region":      "singapore",
-        "version":     "4.0.0",
+        "version":     "4.1.0",
     }
 
 
