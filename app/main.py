@@ -13,6 +13,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+import app.oi_analyzer as oi_engine
+
 from app.config import (
     CACHE_TTL_SECONDS, POLL_INTERVAL_SECONDS,
     MARKET_OPEN_HOUR, MARKET_OPEN_MIN,
@@ -27,6 +29,7 @@ from app.oi_analyzer import (
     classify_signal,
     _build_signal_row,
     _f,
+    _field_usage,
 )
 from app.nse_fetcher import (
     fetch_all_fno_oi_change,
@@ -367,4 +370,6 @@ async def debug():
         "nse_endpoints":  conn,
         "sample_row":     sample[0] if sample else {},   # ← shows real field names
         "sample_rows":    sample,
+        "oi_field_usage": {symbol: _field_usage.get(symbol, {}) for symbol in ("ATHER", "POLICYBZR")},
+        "cas_time_ist":   oi_engine._last_cas_time_ist,
     }

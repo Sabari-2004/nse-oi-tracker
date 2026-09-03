@@ -980,8 +980,8 @@ function scanner() {
       return [
         { label:'PCR',
           val: pcr,
-          cls: pcr>1.2?'text-green-400':pcr<0.8?'text-red-400':'text-yellow-400',
-          sub: pcr>1.2?'↑ Bullish':pcr<0.8?'↓ Bearish':'→ Neutral',
+          cls: pcr>1.3?'text-green-400':pcr<0.7?'text-red-400':'text-yellow-400',
+          sub: this.chainData.pcr_label || (pcr>1.3?'↑ Bullish':pcr<0.7?'↓ Bearish':'→ Neutral'),
           subCls: pcr>1.2?'text-green-600':pcr<0.8?'text-red-600':'text-yellow-600' },
         { label:'ATM Spot', val: (this.chainData.atm_strike||0).toLocaleString('en-IN'), cls:'text-white', sub:'Current Spot', subCls:'text-gray-600' },
         { label:'Max Pain', val: (this.chainData.max_pain||0).toLocaleString('en-IN'), cls:'text-purple-400', sub:'Expiry magnet', subCls:'text-gray-600' },

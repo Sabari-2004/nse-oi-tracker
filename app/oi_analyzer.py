@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 import logging
+from datetime import datetime, time as dt_time
+from zoneinfo import ZoneInfo
 from app.config import (
     PRICE_CHANGE_THRESHOLD, OI_CHANGE_THRESHOLD,
     MIN_OI_ABSOLUTE, CONFIDENCE_HIGH, CONFIDENCE_MEDIUM,
@@ -31,13 +33,15 @@ SIGNAL_LONG_BUILDUP   = "LONG_BUILDUP"
 SIGNAL_SHORT_BUILDUP  = "SHORT_BUILDUP"
 SIGNAL_SHORT_COVERING = "SHORT_COVERING"
 SIGNAL_LONG_UNWINDING = "LONG_UNWINDING"
+SIGNAL_CAS_SHORT_COVERING = "CAS_SHORT_COVERING"
 SIGNAL_NEUTRAL        = "NEUTRAL"
 
 SIGNAL_META = {
     SIGNAL_LONG_BUILDUP:   {"label":"Long Buildup",   "emoji":"🟢","color":"green",  "bias":"Bullish",      "direction":"BUY"},
     SIGNAL_SHORT_BUILDUP:  {"label":"Short Buildup",  "emoji":"🔴","color":"red",    "bias":"Bearish",      "direction":"SELL"},
     SIGNAL_SHORT_COVERING: {"label":"Short Covering", "emoji":"🟡","color":"yellow", "bias":"Bullish Fade", "direction":"BUY"},
-    SIGNAL_LONG_UNWINDING: {"label":"Long Unwinding", "emoji":"🟠","color":"orange", "bias":"Bearish Fade", "direction":"SELL"},
+        SIGNAL_LONG_UNWINDING: {"label":"Long Unwinding", "emoji":"🟠","color":"orange", "bias":"Bearish Fade",     "direction":"SELL"},
+    SIGNAL_CAS_SHORT_COVERING: {"label":"CAS Short Covering", "emoji":"⚡","color":"lime", "bias":"Strong Bullish Next Day", "direction":"BUY"},
     SIGNAL_NEUTRAL:        {"label":"Neutral",        "emoji":"⚪","color":"gray",   "bias":"Sideways",     "direction":"NONE"},
 }
 
@@ -51,6 +55,26 @@ CATEGORY_TO_SIGNAL = {
 
 
 # ── Signal classifier ─────────────────────────────────────────────────────────
+
+_IST = ZoneInfo("Asia/Kolkata")
+_field_usage: dict[str, dict[str, str | None]] = {}
+_last_cas_time_ist: str | None = None
+
+
+def detect_cas_jump(symbol: str, price_change_pct: float, time_ist, oi_change_pct: float) -> bool:
+    """Return true for a strong 15:30–15:40 IST price jump with OI covering."""
+    try:
+        if isinstance(time_ist, datetime):
+            current = time_ist.astimezone(_IST).time()
+        elif hasattr(time_ist, "hour"):
+            current = time_ist
+        else:
+            current = datetime.strptime(str(time_ist).strip(), "%H:%M:%S").time()
+        return bool(dt_time(15, 30) <= current < dt_time(15, 40)
+                    and price_change_pct > 1.5 and oi_change_pct < -3.0)
+    except (TypeError, ValueError):
+        return False
+
 
 def classify_signal(price_change_pct: float, oi_change_pct: float) -> str:
     price_up = price_change_pct >  PRICE_CHANGE_THRESHOLD
@@ -134,10 +158,21 @@ def _symbol(row: dict) -> str:
     return ""
 
 
-def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p, signal) -> dict:
+def _first_numeric(row: dict, fields: tuple[str, ...]) -> tuple[float, str | None]:
+    """Use the first non-empty numeric field and return both value and field name."""
+    for field in fields:
+        if field in row and row[field] not in (None, "", "-"):
+            return _f(row[field]), field
+    return 0.0, None
+
+
+def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
+                      signal, is_cas_jump=False, low_liquidity=False) -> dict:
     meta = SIGNAL_META[signal]
     conf = confidence_score(price_chg_p, oi_chg_p, oi)
-    tier = confidence_tier(conf)
+    if is_cas_jump and signal == SIGNAL_CAS_SHORT_COVERING:
+        conf = min(conf + 15, 100)
+    tier = "LOW" if low_liquidity else confidence_tier(conf)
     strg = signal_strength(price_chg_p, oi_chg_p)
     return {
         "symbol":           sym,
@@ -155,7 +190,8 @@ def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p, si
         "signal_direction": meta["direction"],
         "strength":         strg,
         "confidence":       conf,
-        "confidence_tier":  tier,
+                "confidence_tier": tier,
+        "is_cas_jump": bool(is_cas_jump),
     }
 
 
@@ -185,46 +221,40 @@ def _parse_row(row: dict) -> dict | None:
         row.get("netChange") or 0
     )
 
-    oi = _f(
-        row.get("oi") or row.get("openInterest") or
-        row.get("OI") or row.get("openinterest") or 0
-    )
+    oi, oi_field = _first_numeric(row, ("oi", "openInterest", "OI", "openinterest"))
+    oi_chg, oi_chg_field = _first_numeric(row, ("oiChange", "changeinOpenInterest", "COI"))
+    oi_chg_p, oi_chg_p_field = _first_numeric(row, (
+        "oiChangePct", "perOIchange", "oiChangePer", "changeOI_pct",
+        "perOIChange", "oiChangePercent", "pOIchng", "oichngper",
+    ))
+    _field_usage[sym] = {
+        "oi_field": oi_field,
+        "oi_change_field": oi_chg_field,
+        "oi_change_pct_field": oi_chg_p_field,
+    }
 
-    oi_chg = _f(
-        row.get("oiChange") or row.get("changeinOpenInterest") or
-        row.get("COI") or row.get("changeInOI") or
-        row.get("oichange") or 0
-    )
-
-    oi_chg_p = _f(
-        row.get("oiChangePct") or row.get("perOIchange") or
-        row.get("oiChangePer") or row.get("changeOI_pct") or
-        row.get("perOIChange") or row.get("oiChangePercent") or
-        row.get("pOIchng") or row.get("oichngper") or 0
-    )
-
-    # Derive OI% if we have absolute OI and OI change
+    # Derive OI% if NSE omits it or reports zero.
     if oi_chg_p == 0 and oi_chg != 0 and (oi - oi_chg) > 0:
         oi_chg_p = (oi_chg / (oi - oi_chg)) * 100
 
-    # Skip rows with no price data
     if ltp == 0:
         return None
 
-    # Skip illiquid stocks (min OI check — but only if OI data exists)
-    if oi > 0 and oi < MIN_OI_ABSOLUTE:
-        return None
-
+    low_liquidity = oi > 0 and oi < MIN_OI_ABSOLUTE
     signal = classify_signal(price_chg_p, oi_chg_p)
+    global _last_cas_time_ist
+    scan_time = datetime.now(_IST)
+    cas_jump = detect_cas_jump(sym, price_chg_p, scan_time, oi_chg_p)
+    if cas_jump:
+        _last_cas_time_ist = scan_time.strftime("%Y-%m-%d %H:%M:%S %Z")
+        signal = SIGNAL_CAS_SHORT_COVERING
     if signal == SIGNAL_NEUTRAL:
         return None
 
-    result = _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p, signal)
+    result = _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
+                               signal, is_cas_jump=cas_jump, low_liquidity=low_liquidity)
 
-    # Only HIGH/MEDIUM confidence shown
-    if result["confidence_tier"] == "LOW":
-        return None
-
+    # Keep LOW rows classified for diagnostics; scan_all_fno_realtime filters them.
     return result
 
 
@@ -251,7 +281,7 @@ def scan_all_fno_realtime() -> list[dict]:
 
     for row in rows:
         result = _parse_row(row)
-        if result is None:
+        if result is None or result["confidence_tier"] != "HIGH":
             continue
         if result["symbol"] in seen:
             continue
@@ -324,20 +354,40 @@ def _parse_option_chain(data: dict, symbol: str) -> dict:
             pe_oi  = _f(pe.get("openInterest",          0))
             ce_doi = _f(ce.get("changeinOpenInterest",  0))
             pe_doi = _f(pe.get("changeinOpenInterest",  0))
-            ce_ltp = _f(ce.get("lastPrice",             0))
-            pe_ltp = _f(pe.get("lastPrice",             0))
+            ce_ltp  = _f(ce.get("lastPrice",             0))
+            pe_ltp  = _f(pe.get("lastPrice",             0))
             total_ce += ce_oi
             total_pe += pe_oi
-            pain_map[strike] = (pain_map.get(strike, 0)
-                                + ce_oi * ce_ltp + pe_oi * pe_ltp)
+            # Store OI by strike first; pain is calculated against each
+            # candidate settlement price after all strikes are collected.
+            pain_map.setdefault(strike, {"ce_oi": 0.0, "pe_oi": 0.0})
+            pain_map[strike]["ce_oi"] += ce_oi
+            pain_map[strike]["pe_oi"] += pe_oi
             strikes.append({
                 "strike": strike,
                 "ce_oi": int(ce_oi), "ce_doi": int(ce_doi), "ce_ltp": ce_ltp,
                 "pe_oi": int(pe_oi), "pe_doi": int(pe_doi), "pe_ltp": pe_ltp,
             })
 
-        pcr      = round(total_pe / total_ce, 2) if total_ce > 0 else 0
-        max_pain = min(pain_map, key=pain_map.get) if pain_map else 0
+        pcr = round(total_pe / total_ce, 2) if total_ce > 0 else 0
+        if pcr < 0.7:
+            pcr_label = "Bearish"
+        elif pcr > 1.3:
+            pcr_label = "Bullish"
+        else:
+            pcr_label = "Neutral"
+        # Max pain is the candidate strike with minimum aggregate intrinsic loss.
+        max_pain = 0
+        if pain_map:
+            losses = {
+                candidate: sum(
+                    data["ce_oi"] * max(0, candidate - strike)
+                    + data["pe_oi"] * max(0, strike - candidate)
+                    for strike, data in pain_map.items()
+                )
+                for candidate in pain_map
+            }
+            max_pain = min(losses, key=losses.get)
 
         # Filter ATM ± STRIKES_EACH_SIDE
         atm_list = sorted({s["strike"] for s in strikes})
@@ -352,6 +402,8 @@ def _parse_option_chain(data: dict, symbol: str) -> dict:
             "symbol": symbol, "atm_strike": atm_strike,
             "expiry": exp_dates[0] if exp_dates else None,
             "pcr": pcr,
+            "pcr_label": pcr_label,
+            "spot_source": "records.underlyingValue",
             "total_ce_oi": int(total_ce),
             "total_pe_oi": int(total_pe),
             "max_pain": max_pain,
