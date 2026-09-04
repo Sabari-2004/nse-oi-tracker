@@ -1087,7 +1087,7 @@ function scanner() {
     },
 
     clearTrades() {
-      if (confirm('Clear all trades for today?')) {
+      if (confirm('Clear all saved trades? This cannot be undone.')) {
         this.trades = [];
         this.saveTrades();
       }
@@ -1114,16 +1114,16 @@ function scanner() {
       this.saveTrades();
     },
 
-    /* localStorage persistence — auto-clear if date changed */
+    /* Browser-local persistence — retains the complete trade history until explicitly cleared. */
     todayIST() {
       return new Date().toLocaleDateString('en-CA', {timeZone:'Asia/Kolkata'});
     },
     ensureTradeDay() {
       const today = this.todayIST();
+      // Keep historical trades across sessions and trading days. The date is
+      // metadata only; users can explicitly clear the saved history.
       if (localStorage.getItem(STORAGE_DATE) !== today) {
-        localStorage.removeItem(STORAGE_KEY);
         localStorage.setItem(STORAGE_DATE, today);
-        this.trades = [];
       }
     },
     saveTrades() {
@@ -1133,18 +1133,37 @@ function scanner() {
     },
 
     loadTrades() {
-      const today   = this.todayIST();
-      const stored  = localStorage.getItem(STORAGE_DATE);
-      if (stored !== today) {
-        // New day — clear old trades
-        localStorage.removeItem(STORAGE_KEY);
-        localStorage.setItem(STORAGE_DATE, today);
-        this.trades = [];
-        return;
-      }
+      const today = this.todayIST();
       try {
-        this.trades = JSON.parse(localStorage.getItem(`${STORAGE_KEY}:${today}`) || localStorage.getItem(STORAGE_KEY) || '[]');
-      } catch { this.trades = []; }
+        // Prefer the all-history key. If an older build only wrote daily
+        // keys, migrate every saved day into one durable browser history.
+        const allHistory = localStorage.getItem(STORAGE_KEY);
+        if (allHistory) {
+          const parsed = JSON.parse(allHistory);
+          this.trades = Array.isArray(parsed) ? parsed : [];
+        } else {
+          const migrated = [];
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (!key || !key.startsWith(`${STORAGE_KEY}:`)) continue;
+            try {
+              const daily = JSON.parse(localStorage.getItem(key) || '[]');
+              if (Array.isArray(daily)) migrated.push(...daily);
+            } catch { /* ignore one corrupt legacy day */ }
+          }
+          const seen = new Set();
+          this.trades = migrated.filter(t => {
+            const id = String(t?.id ?? `${t?.symbol ?? ''}:${t?.addedAt ?? ''}`);
+            if (seen.has(id)) return false;
+            seen.add(id);
+            return true;
+          });
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(this.trades));
+        }
+        localStorage.setItem(STORAGE_DATE, today);
+      } catch {
+        this.trades = [];
+      }
     },
 
     /* ── helpers ── */
