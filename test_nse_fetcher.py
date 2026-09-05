@@ -40,10 +40,39 @@ def test_fetch_all_fno_oi_change_enriches_second_snapshot(monkeypatch):
   
     assert second[0]["pChange"] == 5.0
   
-    assert second[0]["price_source"] == "rolling_underlying_snapshot"
+    assert second[0]["price_source"] == "rolling_underlying_snapshot_fallback"
   
 
 
+
+
+def test_native_price_change_is_never_overwritten_by_rolling_snapshot(monkeypatch):
+    """
+    Regression test for the core production bug: the app used to
+    unconditionally replace NSE's own pChange/change fields with a noisy
+    60-second poll-to-poll delta once a previous snapshot existed, even when
+    NSE's payload already had a perfectly good (session/day-relative) value.
+    That silently broke signal generation on every cycle after the first.
+    """
+    module = importlib.reload(nse_fetcher)
+    payloads = iter([
+        # First poll: NSE gives us a native pChange already.
+        {"data": [{"symbol": "XYZ", "underlyingValue": "100", "oi": 1000, "pChange": 1.25}]},
+        # Second poll: underlying moved a lot in one minute (would produce a
+        # huge synthetic pChange under the old buggy logic), but NSE still
+        # supplies its own native value — that must win.
+        {"data": [{"symbol": "XYZ", "underlyingValue": "140", "oi": 1000, "pChange": 1.40}]},
+    ])
+    monkeypatch.setattr(module._nse, "get", lambda *args, **kwargs: next(payloads))
+
+    first = module.fetch_all_fno_oi_change()
+    second = module.fetch_all_fno_oi_change()
+
+    assert first[0]["pChange"] == 1.25
+    assert first[0]["price_source"] == "nse_native"
+    # Must NOT be clobbered with (140-100)/100*100 == 40.0
+    assert second[0]["pChange"] == 1.40
+    assert second[0]["price_source"] == "nse_native"
 
 
 def test_fetch_all_fno_oi_change_preserves_rows_with_invalid_price(monkeypatch):

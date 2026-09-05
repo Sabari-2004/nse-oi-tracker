@@ -1,3 +1,5 @@
+import importlib
+
 from app.oi_analyzer import (
     SIGNAL_LONG_BUILDUP,
     SIGNAL_SHORT_BUILDUP,
@@ -49,3 +51,29 @@ def test_live_nse_field_names_produce_sell_signal():
     assert result["signal"] == SIGNAL_LONG_UNWINDING
     assert result["signal_direction"] == "SELL"
     assert result["oi_change_pct"] < 0
+
+
+def test_scan_all_fno_realtime_returns_medium_tier_not_just_high(monkeypatch):
+    """
+    Regression test: scan_all_fno_realtime()'s own docstring always claimed
+    it returns HIGH + MEDIUM confidence signals, but the filter used to
+    require confidence_tier == "HIGH" exactly, silently discarding every
+    MEDIUM row. On calm trading days this produced zero signals even when
+    real (if less extreme) OI activity existed.
+    """
+    import app.oi_analyzer as oi_analyzer
+    oi_analyzer = importlib.reload(oi_analyzer)
+
+    # price 2.0% -> 28pts, oi 7% -> 22pts, oi_abs 100_000 -> 12pts = 62 => MEDIUM (60-74)
+    medium_row = {
+        "symbol": "MEDIUMCO", "underlyingValue": 500,
+        "pChange": 2.0, "change": 10,
+        "oi": 100_000, "oiChange": 6500, "oiChangePct": 7.0,
+    }
+    monkeypatch.setattr(oi_analyzer, "fetch_all_fno_oi_change", lambda: [medium_row])
+
+    results = oi_analyzer.scan_all_fno_realtime()
+
+    assert len(results) == 1
+    assert results[0]["symbol"] == "MEDIUMCO"
+    assert results[0]["confidence_tier"] == "MEDIUM"
