@@ -1,6 +1,8 @@
 # main.py — FastAPI production app for NSE F&O OI Scanner
-# Version 4.1.0 — RLock fetcher, per-symbol option chain seeding, /api/debug
+# Version 4.2.0 — holiday-aware market status, native-price-change fix,
+#                  MEDIUM-tier signals restored, gated /api/debug
 
+import os
 import logging
 import asyncio
 import time
@@ -8,18 +10,15 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 import app.oi_analyzer as oi_engine
 
-from app.config import (
-    CACHE_TTL_SECONDS, POLL_INTERVAL_SECONDS,
-    MARKET_OPEN_HOUR, MARKET_OPEN_MIN,
-    MARKET_CLOSE_HOUR, MARKET_CLOSE_MIN,
-)
+from app.config import CACHE_TTL_SECONDS, POLL_INTERVAL_SECONDS
+from app.market_calendar import get_market_status, MARKET_STATUS_OPEN, MARKET_STATUS_LABELS
 from app.cache import cache
 from app.oi_analyzer import (
     scan_all_fno_realtime,
@@ -29,13 +28,21 @@ from app.oi_analyzer import (
     classify_signal,
     _build_signal_row,
     _f,
-    _field_usage,
+    sample_field_usage,
 )
 from app.nse_fetcher import (
     fetch_all_fno_oi_change,
     fetch_quote_derivative,
     test_nse_connectivity,
 )
+
+APP_VERSION = "4.2.0"
+
+# Set this in Render's environment variables to lock down /api/debug in
+# production. Left unset, /api/debug stays open (dev convenience) but says
+# so loudly in its own response — "production standard" means the open-by-
+# default state is visible, not silently assumed safe.
+DEBUG_TOKEN = os.environ.get("DEBUG_TOKEN", "")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,12 +58,14 @@ _last_good_signals_at = 0.0
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def is_market_open() -> bool:
-    now = datetime.now(IST)
-    return (
-        now.weekday() < 5 and
-        (now.hour, now.minute) >= (MARKET_OPEN_HOUR, MARKET_OPEN_MIN) and
-        (now.hour, now.minute) <= (MARKET_CLOSE_HOUR, MARKET_CLOSE_MIN)
-    )
+    """
+    Backward-compatible boolean. Used everywhere that only needs a yes/no.
+    This used to ONLY check weekday + clock window, so an NSE trading
+    holiday falling on a weekday was reported as "market open" and the
+    poller scanned a dead market. It now defers to market_calendar, which
+    knows about holidays too.
+    """
+    return get_market_status() == MARKET_STATUS_OPEN
 
 
 def _refresh_signals() -> list[dict]:
@@ -103,7 +112,7 @@ async def background_poller():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("NSE OI Tracker v4.0.0 starting — Singapore 🇸🇬")
+    logger.info(f"NSE OI Tracker v{APP_VERSION} starting")
     task = asyncio.create_task(background_poller())
     yield
     task.cancel()
@@ -113,8 +122,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NSE F&O OI Scanner",
-    description="Production-grade real-time OI signal scanner · Singapore",
-    version="4.1.0",
+    description="Real-time OI signal scanner",
+    version=APP_VERSION,
     lifespan=lifespan,
 )
 
@@ -139,12 +148,14 @@ async def root():
 async def health():
     """Health check — GET and HEAD supported (UptimeRobot uses HEAD)."""
     now = datetime.now(IST)
+    status = get_market_status(now)
     return {
-        "status":      "ok",
-        "time_ist":    now.strftime("%Y-%m-%d %H:%M:%S IST"),
-        "market_open": is_market_open(),
-        "region":      "singapore",
-        "version":     "4.1.0",
+        "status":        "ok",
+        "time_ist":      now.strftime("%Y-%m-%d %H:%M:%S IST"),
+        "market_open":   status == MARKET_STATUS_OPEN,
+        "market_status": status,
+        "market_status_label": MARKET_STATUS_LABELS[status],
+        "version":       APP_VERSION,
     }
 
 
@@ -191,9 +202,12 @@ async def oi_signals(
 
     high   = sum(1 for r in cached if r.get("confidence_tier") == "HIGH")
     medium = sum(1 for r in cached if r.get("confidence_tier") == "MEDIUM")
+    status = get_market_status()
 
     return {
-        "market_open":       is_market_open(),
+        "market_open":       status == MARKET_STATUS_OPEN,
+        "market_status":     status,
+        "market_status_label": MARKET_STATUS_LABELS[status],
         "total_fno_active":  len(cached),
         "high_confidence":   high,
         "medium_confidence": medium,
@@ -351,9 +365,19 @@ async def single_signal(symbol: str):
 
 
 @app.get("/api/debug")
-async def debug():
-    """Diagnostic endpoint — NSE connectivity + raw sample data."""
-    from app.nse_fetcher import fetch_all_fno_oi_change
+async def debug(x_debug_token: str = Header(default="")):
+    """
+    Diagnostic endpoint — NSE connectivity + raw sample data.
+
+    Gated by DEBUG_TOKEN env var. This endpoint exposes raw upstream
+    payloads and internal field-mapping state; leaving it wide open on a
+    public deployment is fine for personal debugging but not something to
+    call "production standard". Set DEBUG_TOKEN in Render's env vars to
+    lock it down — until you do, it stays open and says so explicitly.
+    """
+    if DEBUG_TOKEN and x_debug_token != DEBUG_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Debug-Token header")
+
     conn   = await asyncio.to_thread(test_nse_connectivity)
     cached = cache.get("all_signals") or []
 
@@ -362,14 +386,16 @@ async def debug():
     sample   = raw_rows[:3] if raw_rows else []
 
     return {
-        "timestamp":      datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST"),
-        "market_open":    is_market_open(),
-        "version":        "4.1.0",
-        "cached_signals": len(cached),
-        "raw_rows_count": len(raw_rows),
-        "nse_endpoints":  conn,
-        "sample_row":     sample[0] if sample else {},   # ← shows real field names
-        "sample_rows":    sample,
-        "oi_field_usage": {symbol: _field_usage.get(symbol, {}) for symbol in ("ATHER", "POLICYBZR")},
-        "cas_time_ist":   oi_engine._last_cas_time_ist,
+        "timestamp":        datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST"),
+        "market_status":    get_market_status(),
+        "version":          APP_VERSION,
+        "auth_protected":   bool(DEBUG_TOKEN),
+        "cached_signals":   len(cached),
+        "raw_rows_count":   len(raw_rows),
+        "nse_endpoints":    conn,
+        "sample_row":       sample[0] if sample else {},   # ← shows real field names
+        "sample_rows":      sample,
+        "price_sources":    {r.get("symbol"): r.get("price_source") for r in sample},
+        "oi_field_usage":   sample_field_usage(),
+        "cas_time_ist":     oi_engine._last_cas_time_ist,
     }

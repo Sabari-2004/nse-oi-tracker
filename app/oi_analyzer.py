@@ -61,6 +61,17 @@ _field_usage: dict[str, dict[str, str | None]] = {}
 _last_cas_time_ist: str | None = None
 
 
+def sample_field_usage(limit: int = 5) -> dict[str, dict[str, str | None]]:
+    """
+    A few real symbols' resolved field names, for /api/debug.
+    Previously this hardcoded two specific ticker symbols (ATHER, POLICYBZR)
+    which silently returned nothing once those symbols dropped out of the
+    F&O list or were renamed. This just samples whatever was actually parsed
+    on the most recent scan.
+    """
+    return dict(list(_field_usage.items())[:limit])
+
+
 def detect_cas_jump(symbol: str, price_change_pct: float, time_ist, oi_change_pct: float) -> bool:
     """Return true for a strong 15:30–15:40 IST price jump with OI covering."""
     try:
@@ -98,9 +109,10 @@ def confidence_score(price_chg_p: float, oi_chg_p: float, oi_abs: float) -> int:
       OI conviction   (0–45 pts): how strongly OI changed
       Liquidity       (0–20 pts): absolute OI size (illiquid stocks filtered)
 
-    HIGH   ≥ 65 → shown (⭐⭐⭐)
-    MEDIUM 40–64 → shown (⭐⭐)
-    LOW    < 40  → hidden
+    Tier thresholds are defined in config.py (CONFIDENCE_HIGH / CONFIDENCE_MEDIUM)
+    — do not hardcode numbers in this docstring, they will drift out of sync
+    with the actual thresholds again, which is exactly the bug this comment
+    used to have (it said "HIGH ≥ 65" while config.py said 75).
     """
     score = 0
     p = abs(price_chg_p)
@@ -270,11 +282,18 @@ def scan_all_fno_realtime() -> list[dict]:
     """
     Scan ALL NSE F&O stocks for high-confidence signals.
 
-    Uses: /api/live-analysis-oi-spurts-underlyings (confirmed working from Singapore)
+    Uses: /api/live-analysis-oi-spurts-underlyings
     This single endpoint returns OI + price data for ALL ~200 F&O underlyings.
     We classify all 4 signal types from the price + OI direction combination.
 
-    Returns only HIGH (≥65) + MEDIUM (≥40) confidence signals, sorted by confidence.
+    Returns HIGH + MEDIUM confidence signals, sorted by confidence (HIGH first).
+    LOW-confidence rows are computed (for /api/debug diagnostics) but dropped
+    here — they're the noise floor, not a signal.
+
+    NOTE: this used to silently drop everything below HIGH despite this exact
+    docstring claiming HIGH+MEDIUM were both returned — CONFIDENCE_MEDIUM was
+    dead code. That mismatch is fixed; if you change the filter here, update
+    this docstring in the same commit, not "later".
     """
     rows = fetch_all_fno_oi_change()
 
@@ -287,7 +306,7 @@ def scan_all_fno_realtime() -> list[dict]:
 
     for row in rows:
         result = _parse_row(row)
-        if result is None or result["confidence_tier"] != "HIGH":
+        if result is None or result["confidence_tier"] == "LOW":
             continue
         if result["symbol"] in seen:
             continue

@@ -242,10 +242,33 @@ _price_snapshot_lock = RLock()
 
 # ── Public data functions ──────────────────────────────────────────────────────
 
+# Field names that mean "NSE already told us the price change for this row".
+# If ANY of these are present, we trust NSE's own number — it's almost
+# certainly a proper session/day-relative % change, which is the correct
+# basis for signal generation. We must never clobber it.
+_NATIVE_PRICE_CHANGE_FIELDS = (
+    "pChange", "perChange", "changePer", "change_p", "perchange",
+    "pchange", "percentChange", "change", "priceChange", "netChange",
+)
+
+
 def fetch_all_fno_oi_change() -> list[dict]:
     """
     Fetch OI + price data for ALL F&O underlyings.
-    CONFIRMED WORKING from Singapore.
+
+    IMPORTANT: this used to unconditionally overwrite NSE's own price-change
+    fields with a 60-second poll-to-poll delta computed from an in-memory
+    snapshot. That silently downgraded a proper day-relative % change into
+    minute-level noise on every cycle after the first, which starved the
+    HIGH-confidence signal filter (it compares that price delta against an
+    OI-change % that IS day/session relative — comparing two different
+    timeframes made the whole signal matrix statistically broken).
+
+    Fixed behavior: NSE's own price-change fields are used whenever present.
+    The rolling snapshot below is now only a FALLBACK for rows where NSE's
+    payload genuinely omits any price-change field (this does happen for
+    some underlyings on this endpoint) — in that case only, we fall back to
+    a same-poll-interval delta so the row isn't dropped outright.
     """
     data = _nse.get(
         f"{NSE_BASE}/api/live-analysis-oi-spurts-underlyings",
@@ -265,13 +288,19 @@ def fetch_all_fno_oi_change() -> list[dict]:
                 current_price = 0.0
 
             enriched = dict(row)
+            has_native_price_change = any(
+                row.get(field) not in (None, "", "-") for field in _NATIVE_PRICE_CHANGE_FIELDS
+            )
             previous_price = _price_snapshots.get(symbol) if symbol else None
+
             if symbol and current_price > 0:
-                if previous_price and previous_price > 0:
+                if has_native_price_change:
+                    enriched["price_source"] = "nse_native"
+                elif previous_price and previous_price > 0:
                     enriched["ltp"] = current_price
                     enriched["change"] = current_price - previous_price
                     enriched["pChange"] = ((current_price - previous_price) / previous_price) * 100
-                    enriched["price_source"] = "rolling_underlying_snapshot"
+                    enriched["price_source"] = "rolling_underlying_snapshot_fallback"
                 _price_snapshots[symbol] = current_price
             enriched_rows.append(enriched)
 
@@ -329,7 +358,15 @@ def fetch_quote_derivative(symbol: str) -> dict | None:
 
 
 def test_nse_connectivity() -> dict:
-    """Diagnostic — test all key endpoints. Accessible via /api/debug."""
+    """
+    Diagnostic — test all key endpoints. Accessible via /api/debug.
+
+    Note: whether curl-cffi's Chrome TLS impersonation actually bypasses
+    Akamai depends partly on the deployment's egress region matching
+    what was tested. Don't trust a comment claiming "confirmed working
+    from <region>" unless render.yaml actually pins that region — see
+    render.yaml's `region:` field, which this app now sets explicitly.
+    """
     results = {}
     tests = [
         ("oi_spurts",    lambda: fetch_all_fno_oi_change()),
