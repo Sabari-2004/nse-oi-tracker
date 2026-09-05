@@ -2,7 +2,23 @@ services:
   - type: web
     name: nse-oi-tracker
     env: python
+    # Pinned explicitly. Code comments/logs previously claimed NSE access was
+    # "confirmed working from Singapore" while this field was unset, meaning
+    # nothing actually guaranteed the deployed instance ran there. If you
+    # need a different region, re-verify Akamai/NSE behavior after changing
+    # this — don't assume it still works the same way.
+    region: singapore
+    # NOTE: the free plan spins the instance down after ~15 minutes idle.
+    # The price/OI native-source fix means a cold start no longer zeroes out
+    # every signal like it used to, but you still lose the OI-spurts session
+    # cache and any smoothing state on every wake-up. For a genuinely
+    # "production standard" always-on scanner, upgrade off `free` — that is
+    # a real tradeoff this file was silently making before, not a solved
+    # problem.
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
+    envVars:
+      - key: DEBUG_TOKEN
+        generateValue: true
