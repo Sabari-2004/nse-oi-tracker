@@ -370,7 +370,7 @@
                 <div class="text-5xl mb-3 opacity-30">📭</div>
                 <div class="text-sm" x-text="marketOpen
                   ? 'Scanning all F&O stocks… No strong signals yet. Try refresh.'
-                  : 'Market closed (Mon–Fri 09:15–15:30 IST). Signals appear during live market.'">
+                  : (marketStatusLabel || 'Market closed (Mon–Fri 09:15–15:30 IST). Signals appear during live market.')">
                 </div>
               </td></tr>
             </template>
@@ -844,7 +844,7 @@ function scanner() {
     chainData: null, selectedSymbol: '', chainInput: '',
     loading: false, chainLoading: false,
     error: '', countdown: 60,
-    clock: '', marketOpen: false,
+    clock: '', marketOpen: false, marketStatusLabel: '',
     activeFilter: '', confidenceFilter: '', activeTab: 'signals',
     search: '', sortBy: 'confidence',
     trades: [], todayLabel: '',
@@ -934,6 +934,7 @@ function scanner() {
         this.highConf     = d.high_confidence || 0;
         this.mediumConf   = d.medium_confidence || 0;
         this.marketOpen   = d.market_open ?? this.marketOpen;
+        this.marketStatusLabel = d.market_status_label || '';
         this.updateTradesCMP();
       } catch(e) {
         this.error = 'NSE fetch failed: ' + e.message + '. Auto-retry in 60s.';
