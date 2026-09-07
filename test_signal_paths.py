@@ -77,3 +77,23 @@ def test_scan_all_fno_realtime_returns_medium_tier_not_just_high(monkeypatch):
     assert len(results) == 1
     assert results[0]["symbol"] == "MEDIUMCO"
     assert results[0]["confidence_tier"] == "MEDIUM"
+
+
+def test_modest_valid_signal_is_not_discarded_as_low(monkeypatch):
+    import app.oi_analyzer as oi_analyzer
+    oi_analyzer = importlib.reload(oi_analyzer)
+
+    # 0.25% price change and 30% OI change satisfy direction thresholds and
+    # should be visible as a MEDIUM signal rather than silently disappearing.
+    row = {
+        "symbol": "MODESTCO", "underlyingValue": 500,
+        "pChange": 0.25, "change": 1.25,
+        "oi": 100_000, "oiChange": 23_000, "oiChangePct": 30.0,
+    }
+    monkeypatch.setattr(oi_analyzer, "fetch_all_fno_oi_change", lambda: [row])
+
+    results = oi_analyzer.scan_all_fno_realtime()
+
+    assert len(results) == 1
+    assert results[0]["symbol"] == "MODESTCO"
+    assert results[0]["confidence_tier"] == "MEDIUM"
