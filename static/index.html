@@ -471,7 +471,7 @@
 
         <!-- Stats -->
         <div x-show="chainData && !chainData.error && chainData.strikes && chainData.strikes.length > 0"
-             class="grid grid-cols-3 gap-px bg-gray-800">
+             class="grid grid-cols-2 md:grid-cols-4 gap-px bg-gray-800">
           <template x-for="stat in chainStats()" :key="stat.label">
             <div class="bg-gray-900 p-3 text-center">
               <div class="text-[10px] text-gray-500 mb-1" x-text="stat.label"></div>
@@ -479,6 +479,19 @@
               <div class="text-[10px] mt-0.5" :class="stat.subCls" x-text="stat.sub"></div>
             </div>
           </template>
+        </div>
+
+        <div x-show="chainData && !chainData.error && chainData.strikes && chainData.strikes.length > 0"
+             class="px-4 py-3 border-b border-gray-800 bg-gray-950/40">
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span class="text-[10px] uppercase tracking-wider text-gray-500">Current direction</span>
+            <span class="font-bold text-sm"
+                  :class="chainDirection().cls"
+                  x-text="chainDirection().label"></span>
+            <span class="text-[10px] text-gray-500" x-text="chainDirection().detail"></span>
+          </div>
+          <div class="text-[10px] text-gray-600 mt-1"
+               x-text="'Confirmation: ' + chainDirection().factors + ' · Informational bias, not a standalone trade signal'"></div>
         </div>
 
         <!-- OI bar chart -->
@@ -987,6 +1000,39 @@ function scanner() {
         { label:'ATM Spot', val: (this.chainData.atm_strike||0).toLocaleString('en-IN'), cls:'text-white', sub:'Current Spot', subCls:'text-gray-600' },
         { label:'Max Pain', val: (this.chainData.max_pain||0).toLocaleString('en-IN'), cls:'text-purple-400', sub:'Expiry magnet', subCls:'text-gray-600' },
       ];
+    },
+
+    chainDirection() {
+      const d = this.chainData || {};
+      const spot = Number(d.atm_strike || 0);
+      const pain = Number(d.max_pain || 0);
+      const pcr = Number(d.pcr || 0);
+      const rows = Array.isArray(d.strikes) ? d.strikes : [];
+      let bull = 0, bear = 0, factors = [];
+
+      // Max pain is a settlement magnet, not proof of momentum. Count it only
+      // when it is meaningfully away from spot, then require confirmation.
+      const painPct = spot > 0 ? ((pain - spot) / spot) * 100 : 0;
+      if (painPct > 0.25) { bull++; factors.push('max pain above spot'); }
+      else if (painPct < -0.25) { bear++; factors.push('max pain below spot'); }
+
+      if (pcr > 1.3) { bull++; factors.push('PCR bullish'); }
+      else if (pcr > 0 && pcr < 0.7) { bear++; factors.push('PCR bearish'); }
+
+      const ceDoi = rows.reduce((sum, r) => sum + Number(r.ce_doi || 0), 0);
+      const peDoi = rows.reduce((sum, r) => sum + Number(r.pe_doi || 0), 0);
+      const totalOi = rows.reduce((sum, r) => sum + Number(r.ce_oi || 0) + Number(r.pe_oi || 0), 0);
+      const oiPct = totalOi > 0 ? ((peDoi - ceDoi) / totalOi) * 100 : 0;
+      if (oiPct > 0.5) { bull++; factors.push('PE OI addition'); }
+      else if (oiPct < -0.5) { bear++; factors.push('CE OI addition'); }
+
+      if (bull >= 2 && bear === 0) {
+        return { label:'↑ BULLISH', cls:'text-green-400', detail:`Toward ${pain.toLocaleString('en-IN')} max pain`, factors:factors.join(' + ') };
+      }
+      if (bear >= 2 && bull === 0) {
+        return { label:'↓ BEARISH', cls:'text-red-400', detail:`Toward ${pain.toLocaleString('en-IN')} max pain`, factors:factors.join(' + ') };
+      }
+      return { label:'→ MIXED / RANGE', cls:'text-yellow-400', detail:'No aligned confirmation', factors:factors.length ? factors.join(' + ') : 'insufficient directional evidence' };
     },
 
     drawChart(data) {
