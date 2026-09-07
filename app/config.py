@@ -24,13 +24,14 @@ OI_CHANGE_THRESHOLD    = 0.50    # 0.50% — catches real OI buildup/unwinding
 
 # ─── Confidence tiers (multi-factor score 0–100) ─────────────────────────────
 
-# Only very high-conviction setups are eligible for display.
+# Display both tiers. A 60-point floor was too restrictive for ordinary
+# intraday moves: rows could satisfy the signal-direction thresholds yet still
+# be discarded because the score awarded no points for modest price/OI moves.
 
 CONFIDENCE_HIGH   = 75   # ⭐⭐⭐⭐ — very high confidence
+CONFIDENCE_MEDIUM = 45   # ⭐⭐ — actionable, but less extreme
 
-CONFIDENCE_MEDIUM = 60   # retained for backwards-compatible scoring, never displayed
-
-# Below HIGH → filtered out
+# Below MEDIUM → filtered out
 
 
 
@@ -73,4 +74,3 @@ MARKET_OPEN_MIN    = 15
 MARKET_CLOSE_HOUR  = 15
 
 MARKET_CLOSE_MIN   = 30
-
