@@ -34,3 +34,11 @@ def test_trade_save_records_date_and_migrates_only_same_day_legacy_data():
     assert "localStorage.getItem(STORAGE_DATE) === today" in source
     assert "Never resurrect an older day's history" in source
     assert "Trade history could not be saved in browser storage" in source
+
+
+def test_trade_history_has_indexeddb_redundant_backup():
+    source = INDEX.read_text(encoding="utf-8")
+    assert "indexedDB.open('nse_oi_tracker_history', 1)" in source
+    assert "saveTradesToIndexedDB(today, this.trades)" in source
+    assert "loadTradesFromIndexedDB()" in source
+    assert "!this._dailyStoragePresent" in source
