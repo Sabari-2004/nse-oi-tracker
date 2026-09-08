@@ -1100,6 +1100,7 @@ function scanner() {
       const trade = {
         id:               Date.now(),
         symbol:           row.symbol,
+        tradeDate:        this.todayIST(),
         signal:           row.signal,
         signal_label:     row.signal_label,
         signal_emoji:     row.signal_emoji,
@@ -1173,18 +1174,31 @@ function scanner() {
     },
     saveTrades() {
       const today = this.todayIST();
-      localStorage.setItem(STORAGE_DATE, today);
-      localStorage.setItem(`${STORAGE_KEY}:${today}`, JSON.stringify(this.trades));
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.trades));
+      try {
+        localStorage.setItem(STORAGE_DATE, today);
+        localStorage.setItem(`${STORAGE_KEY}:${today}`, JSON.stringify(this.trades));
+        // Compatibility mirror for older deployed bundles. The daily key is
+        // authoritative; this mirror is only read when it was written today.
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.trades));
+      } catch (err) {
+        console.warn('Trade history could not be saved in browser storage:', err);
+      }
     },
 
     loadTrades() {
       const today = this.todayIST();
       try {
-        const daily = localStorage.getItem(`${STORAGE_KEY}:${today}`);
+        let daily = localStorage.getItem(`${STORAGE_KEY}:${today}`);
+        // Migrate trades saved by the previous bundle only when its date marker
+        // proves they belong to today. Never resurrect an older day's history.
+        if (!daily && localStorage.getItem(STORAGE_DATE) === today) {
+          daily = localStorage.getItem(STORAGE_KEY);
+        }
         const parsed = daily ? JSON.parse(daily) : [];
         this.trades = Array.isArray(parsed) ? parsed : [];
+        this.trades.forEach(t => { if (!t.tradeDate) t.tradeDate = today; });
         localStorage.setItem(STORAGE_KEY, JSON.stringify(this.trades));
+        localStorage.setItem(`${STORAGE_KEY}:${today}`, JSON.stringify(this.trades));
         localStorage.setItem(STORAGE_DATE, today);
       } catch {
         this.trades = [];
