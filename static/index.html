@@ -908,6 +908,7 @@ function scanner() {
     async boot() {
       this.todayLabel = new Date().toLocaleDateString('en-IN', { weekday:'long', year:'numeric', month:'short', day:'numeric' });
       this.loadTrades();
+      this.loadTradesFromIndexedDB();
       this.tickClock();
       setInterval(() => this.tickClock(), 1000);
       await this.fetchSignals();
@@ -1183,6 +1184,51 @@ function scanner() {
       } catch (err) {
         console.warn('Trade history could not be saved in browser storage:', err);
       }
+      this.saveTradesToIndexedDB(today, this.trades);
+    },
+
+    saveTradesToIndexedDB(today, trades) {
+      if (!window.indexedDB) return;
+      try {
+        const request = indexedDB.open('nse_oi_tracker_history', 1);
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          if (!db.objectStoreNames.contains('daily')) db.createObjectStore('daily', { keyPath: 'date' });
+        };
+        request.onsuccess = () => {
+          const db = request.result;
+          const tx = db.transaction('daily', 'readwrite');
+          tx.objectStore('daily').put({ date: today, trades: JSON.parse(JSON.stringify(trades)) });
+          tx.oncomplete = () => db.close();
+          tx.onerror = () => db.close();
+        };
+        request.onerror = () => console.warn('IndexedDB trade backup unavailable');
+      } catch (err) { console.warn('IndexedDB trade backup failed:', err); }
+    },
+
+    loadTradesFromIndexedDB() {
+      if (!window.indexedDB) return;
+      const today = this.todayIST();
+      try {
+        const request = indexedDB.open('nse_oi_tracker_history', 1);
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          if (!db.objectStoreNames.contains('daily')) db.createObjectStore('daily', { keyPath: 'date' });
+        };
+        request.onsuccess = () => {
+          const db = request.result;
+          const get = db.transaction('daily', 'readonly').objectStore('daily').get(today);
+          get.onsuccess = () => {
+            const saved = get.result;
+            if (!this._dailyStoragePresent && saved && Array.isArray(saved.trades)) {
+              this.trades = saved.trades;
+              this.saveTrades();
+            }
+            db.close();
+          };
+          get.onerror = () => db.close();
+        };
+      } catch (err) { console.warn('IndexedDB trade recovery failed:', err); }
     },
 
     loadTrades() {
@@ -1194,6 +1240,7 @@ function scanner() {
         if (!daily && localStorage.getItem(STORAGE_DATE) === today) {
           daily = localStorage.getItem(STORAGE_KEY);
         }
+        this._dailyStoragePresent = Boolean(daily);
         const parsed = daily ? JSON.parse(daily) : [];
         this.trades = Array.isArray(parsed) ? parsed : [];
         this.trades.forEach(t => { if (!t.tradeDate) t.tradeDate = today; });
