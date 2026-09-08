@@ -1226,6 +1226,15 @@ function scanner() {
         };
         request.onsuccess = () => {
           const db = request.result;
+          const cleanupTx = db.transaction('daily', 'readwrite');
+          const cleanupStore = cleanupTx.objectStore('daily');
+          const cleanup = cleanupStore.openCursor();
+          cleanup.onsuccess = () => {
+            const cursor = cleanup.result;
+            if (!cursor) return;
+            if (cursor.key !== today) cursor.delete();
+            cursor.continue();
+          };
           const get = db.transaction('daily', 'readonly').objectStore('daily').get(today);
           get.onsuccess = () => {
             const saved = get.result;
@@ -1240,8 +1249,21 @@ function scanner() {
       } catch (err) { console.warn('IndexedDB trade recovery failed:', err); }
     },
 
+    clearOldBrowserHistory(today) {
+      try {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith(`${STORAGE_KEY}:`) && key !== `${STORAGE_KEY}:${today}`) {
+            localStorage.removeItem(key);
+          }
+        }
+        const marker = localStorage.getItem(STORAGE_DATE);
+        if (marker && marker !== today) localStorage.removeItem(STORAGE_KEY);
+      } catch (err) { console.warn('Old browser history cleanup failed:', err); }
+    },
     loadTrades() {
       const today = this.todayIST();
+      this.clearOldBrowserHistory(today);
       try {
         let daily = localStorage.getItem(`${STORAGE_KEY}:${today}`);
         // Migrate trades saved by the previous bundle only when its date marker
