@@ -949,6 +949,7 @@ function scanner() {
         this.mediumConf   = d.medium_confidence || 0;
         this.marketOpen   = d.market_open ?? this.marketOpen;
         this.marketStatusLabel = d.market_status_label || '';
+        this.autoSaveSignals(this.signals);
         this.updateTradesCMP();
       } catch(e) {
         this.error = 'NSE fetch failed: ' + e.message + '. Auto-retry in 60s.';
@@ -1091,7 +1092,15 @@ function scanner() {
       return this.trades.some(t => t.symbol === sym);
     },
 
-    addTrade(row) {
+    autoSaveSignals(rows) {
+      // A received signal is itself a history event. Save each symbol once per
+      // IST day so the user does not have to click + Trade before refresh.
+      (rows || []).forEach(row => {
+        if (!this.alreadyAdded(row.symbol)) this.addTrade(row, true);
+      });
+    },
+
+    addTrade(row, silent=false) {
       if (this.alreadyAdded(row.symbol)) return;
       const p      = SIGNAL_PARAMS[row.signal] || { dir:'BUY', tg1p:0.5, tg2p:1.0, slp:0.3 };
       const lv     = this.levels(row);
@@ -1122,7 +1131,7 @@ function scanner() {
 
       this.trades.push(trade);
       this.saveTrades();
-      this.activeTab = 'trades';
+      if (!silent) this.activeTab = 'trades';
     },
 
     removeTrade(id) {
