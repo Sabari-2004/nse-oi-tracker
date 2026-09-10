@@ -1,15 +1,17 @@
-# main.py — FastAPI production app for NSE F&O OI Scanner
-# Version 4.2.0 — holiday-aware market status, native-price-change fix,
+# main.py ? FastAPI production app for NSE F&O OI Scanner
+# Version 4.2.0 ? holiday-aware market status, native-price-change fix,
 #                  MEDIUM-tier signals restored, gated /api/debug
 
-import os
 import logging
 import asyncio
 import time
 from datetime import datetime
-from zoneinfo import ZoneInfo
+from pathlib import Path
 from contextlib import asynccontextmanager
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, HTTPException, Query, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -17,8 +19,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import app.oi_analyzer as oi_engine
 
-from app.config import CACHE_TTL_SECONDS, POLL_INTERVAL_SECONDS
-from app.market_calendar import get_market_status, MARKET_STATUS_OPEN, MARKET_STATUS_LABELS
+from app.market_calendar import (
+    get_market_status,
+    has_holiday_calendar_for_year,
+    holiday_calendar_metadata,
+    refresh_holiday_calendar,
+    MARKET_STATUS_OPEN,
+    MARKET_STATUS_LABELS,
+)
 from app.cache import cache
 from app.oi_analyzer import (
     scan_all_fno_realtime,
@@ -35,27 +43,37 @@ from app.nse_fetcher import (
     fetch_quote_derivative,
     test_nse_connectivity,
 )
+from config.settings import get_settings
+from database.repository import SignalRepository
+from utils.time import IST, now_ist, ist_trade_date
 
-APP_VERSION = "4.2.0"
+APP_VERSION = "4.3.0"
+settings = get_settings()
+repository = SignalRepository(settings.database_path)
 
 # Set this in Render's environment variables to lock down /api/debug in
 # production. Left unset, /api/debug stays open (dev convenience) but says
-# so loudly in its own response — "production standard" means the open-by-
+# so loudly in its own response ? "production standard" means the open-by-
 # default state is visible, not silently assumed safe.
-DEBUG_TOKEN = os.environ.get("DEBUG_TOKEN", "")
+DEBUG_TOKEN = settings.debug_token
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
-IST = ZoneInfo("Asia/Kolkata")
 STALE_SIGNAL_GRACE_SECONDS = 180
 _last_good_signals: list[dict] = []
 _last_good_signals_at = 0.0
+_last_refresh_at_ist: str | None = None
+_last_refresh_was_stale = False
+_last_snapshot_id: int | None = None
+_refresh_lock = asyncio.Lock()
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+STATIC_DIR = PROJECT_ROOT / "static"
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ?? Helpers ???????????????????????????????????????????????????????????????????
 
 def is_market_open() -> bool:
     """
@@ -69,56 +87,157 @@ def is_market_open() -> bool:
 
 
 def _refresh_signals() -> list[dict]:
+    """Fetch, persist, and cache one signal scan in a worker thread."""
     global _last_good_signals, _last_good_signals_at
+    global _last_refresh_at_ist, _last_refresh_was_stale, _last_snapshot_id
     signals = scan_all_fno_realtime()
-    now = time.monotonic()
+    monotonic_now = time.monotonic()
+    captured_at = now_ist()
+    served_stale = False
     if signals:
         _last_good_signals = signals
-        _last_good_signals_at = now
-    elif _last_good_signals and now - _last_good_signals_at <= STALE_SIGNAL_GRACE_SECONDS:
+        _last_good_signals_at = monotonic_now
+    elif _last_good_signals and monotonic_now - _last_good_signals_at <= STALE_SIGNAL_GRACE_SECONDS:
         logger.warning("Empty scan received; serving last valid signals during grace period")
         signals = _last_good_signals
-    cache.set("all_signals", signals, ttl=CACHE_TTL_SECONDS)
+        served_stale = True
+
+    if not served_stale:
+        try:
+            write = repository.record_scan(signals, captured_at)
+            _last_snapshot_id = write.snapshot_id
+            repository.update_open_events(signals, captured_at)
+        except Exception:
+            logger.exception("Could not persist scan history")
+
+    _last_refresh_at_ist = captured_at.isoformat()
+    _last_refresh_was_stale = served_stale
+    cache.set("all_signals", signals, ttl=settings.cache_ttl_seconds)
     h = sum(1 for s in signals if s.get("confidence_tier") == "HIGH")
     m = sum(1 for s in signals if s.get("confidence_tier") == "MEDIUM")
-    logger.info(f"Scan complete — {len(signals)} signals ({h} HIGH, {m} MEDIUM)")
+    logger.info(f"Scan complete ? {len(signals)} signals ({h} HIGH, {m} MEDIUM)")
     return signals
 
 
-# ── Background poller ─────────────────────────────────────────────────────────
+async def refresh_signals() -> list[dict]:
+    """Serialize all refresh callers to avoid upstream request stampedes."""
+    async with _refresh_lock:
+        return await asyncio.to_thread(_refresh_signals)
+
+
+async def scheduled_refresh() -> None:
+    """Refresh only during an exchange-open session."""
+    if not is_market_open():
+        return
+    try:
+        await refresh_signals()
+    except Exception:
+        logger.exception("Scheduled signal refresh failed")
+
+
+async def scheduled_history_rollover() -> None:
+    """Archive prior-day UI history at 00:05 IST and retain a local archive."""
+    now = now_ist()
+    try:
+        archived = await asyncio.to_thread(
+            repository.archive_previous_history,
+            ist_trade_date(now),
+            settings.history_retention_days,
+        )
+        logger.info("Daily history rollover archived %s event(s)", archived)
+    except Exception:
+        logger.exception("Daily history rollover failed")
+
+
+async def scheduled_market_close() -> None:
+    """Mark unresolved current-day signal events as expired after close."""
+    try:
+        expired = await asyncio.to_thread(repository.expire_open_events, now_ist())
+        logger.info("Market-close processing expired %s event(s)", expired)
+    except Exception:
+        logger.exception("Market-close processing failed")
+
+
+async def scheduled_holiday_calendar_refresh() -> None:
+    """Refresh NSE's public F&O calendar; bundled dates stay as fallback."""
+    result = await asyncio.to_thread(refresh_holiday_calendar)
+    if result["updated"]:
+        logger.info("NSE holiday calendar refreshed for %s", result["years"])
+    else:
+        logger.warning("NSE holiday calendar refresh failed; using bundled dates")
+
+
+# ?? Background poller ?????????????????????????????????????????????????????????
 
 async def background_poller():
     """Re-scan all F&O stocks every 60s during market hours."""
     # First scan: wait 15s for session to fully initialise, then scan immediately
     await asyncio.sleep(15)
     if is_market_open():
-        logger.info("Market open — initial scan…")
+        logger.info("Market open ? initial scan?")
         try:
             await asyncio.to_thread(_refresh_signals)
         except Exception as e:
             logger.error(f"Initial scan error: {e}")
 
     while True:
-        await asyncio.sleep(POLL_INTERVAL_SECONDS)
+        await asyncio.sleep(settings.poll_interval_seconds)
         if is_market_open():
-            logger.info("Polling — scanning F&O stocks…")
+            logger.info("Polling ? scanning F&O stocks?")
             try:
                 await asyncio.to_thread(_refresh_signals)
             except Exception as e:
                 logger.error(f"Poll scan error: {e}")
 
 
-# ── Lifecycle ─────────────────────────────────────────────────────────────────
+# ?? Lifecycle ?????????????????????????????????????????????????????????????????
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"NSE OI Tracker v{APP_VERSION} starting")
-    task = asyncio.create_task(background_poller())
+    scheduler = AsyncIOScheduler(timezone=IST)
+    scheduler.add_job(
+        scheduled_refresh,
+        IntervalTrigger(seconds=settings.poll_interval_seconds, timezone=IST),
+        id="nse-signal-refresh",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        scheduled_history_rollover,
+        CronTrigger(hour=0, minute=5, timezone=IST),
+        id="daily-history-rollover",
+        replace_existing=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        scheduled_market_close,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=31, timezone=IST),
+        id="market-close-expiry",
+        replace_existing=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        scheduled_holiday_calendar_refresh,
+        CronTrigger(day_of_week="sun", hour=7, minute=0, timezone=IST),
+        id="nse-holiday-calendar-refresh",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.start()
+    app.state.scheduler = scheduler
+    # A newly deployed year is unknown until NSE's public calendar loads.
+    # Await only in that case: normal startup stays local and fast.
+    if not has_holiday_calendar_for_year(now_ist().year):
+        await scheduled_holiday_calendar_refresh()
+    await scheduled_refresh()
     yield
-    task.cancel()
+    scheduler.shutdown(wait=False)
 
 
-# ── FastAPI app ───────────────────────────────────────────────────────────────
+# ?? FastAPI app ???????????????????????????????????????????????????????????????
 
 app = FastAPI(
     title="NSE F&O OI Scanner",
@@ -129,25 +248,27 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # The shipped UI is same-origin. An external dashboard must be opted in
+    # through NSE_OI_CORS_ORIGINS rather than using a browser-wide wildcard.
+    allow_origins=list(settings.cors_origins),
     allow_methods=["GET", "HEAD"],
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# ?? Routes ????????????????????????????????????????????????????????????????????
 
 @app.get("/", include_in_schema=False)
 async def root():
-    return FileResponse("static/index.html")
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health():
-    """Health check — GET and HEAD supported (UptimeRobot uses HEAD)."""
-    now = datetime.now(IST)
+    """Health check ? GET and HEAD supported (UptimeRobot uses HEAD)."""
+    now = now_ist()
     status = get_market_status(now)
     return {
         "status":        "ok",
@@ -156,6 +277,11 @@ async def health():
         "market_status": status,
         "market_status_label": MARKET_STATUS_LABELS[status],
         "version":       APP_VERSION,
+        "database":       "ready",
+        "last_refresh_at_ist": _last_refresh_at_ist,
+        "last_refresh_was_stale": _last_refresh_was_stale,
+        "last_snapshot_id": _last_snapshot_id,
+        "holiday_calendar": holiday_calendar_metadata(),
     }
 
 
@@ -170,17 +296,17 @@ async def oi_signals(
     Scan ALL NSE F&O stocks. Returns HIGH + MEDIUM confidence signals only.
 
     Data source: /api/live-analysis-oi-spurts-underlyings (confirmed working)
-    Signal classification: price direction × OI direction → 4 signal types
+    Signal classification: price direction ? OI direction ? 4 signal types
     """
     if refresh:
         cache.delete("all_signals")
 
     cached = cache.get("all_signals")
 
-    # If cache empty AND market open → force fresh scan (don't serve stale empty)
+    # If cache empty AND market open ? force fresh scan (don't serve stale empty)
     if (cached is None or len(cached) == 0) and is_market_open():
-        logger.info("Cache empty during market hours → fresh scan")
-        cached = await asyncio.to_thread(_refresh_signals)
+        logger.info("Cache empty during market hours ? fresh scan")
+        cached = await refresh_signals()
 
     if cached is None:
         cached = []
@@ -215,7 +341,40 @@ async def oi_signals(
         "signal_counts":     counts,
         "signal_meta":       SIGNAL_META,
         "signals":           results,
-        "timestamp":         datetime.now(IST).strftime("%H:%M:%S"),
+        "timestamp":         now_ist().strftime("%H:%M:%S"),
+        "last_refresh_at_ist": _last_refresh_at_ist,
+        "is_stale":          _last_refresh_was_stale,
+        "snapshot_id":       _last_snapshot_id,
+    }
+
+
+@app.get("/api/history/today")
+async def today_history(
+    limit: int = Query(1000, ge=1, le=5000, description="Maximum number of current-day events"),
+):
+    """Return server-owned signal events visible for the current IST date."""
+    trade_date = ist_trade_date()
+    events, total = await asyncio.to_thread(repository.history_for_date, trade_date, limit=limit)
+    performance = await asyncio.to_thread(repository.performance_for_date, trade_date)
+    return {
+        "trade_date": trade_date,
+        "visible_history_scope": "today_ist",
+        "reset_policy": "Previous-day events are archived at 00:05 IST.",
+        "total_events": total,
+        "events": events,
+        "performance": performance,
+        "timestamp": now_ist().strftime("%Y-%m-%d %H:%M:%S IST"),
+    }
+
+
+@app.get("/api/analytics/today")
+async def today_analytics():
+    """Return server-calculated daily performance for durable signal events."""
+    trade_date = ist_trade_date()
+    return {
+        "trade_date": trade_date,
+        "metrics": await asyncio.to_thread(repository.performance_for_date, trade_date),
+        "timestamp": now_ist().strftime("%Y-%m-%d %H:%M:%S IST"),
     }
 
 
@@ -233,16 +392,16 @@ async def category_scan(category: str, refresh: bool = Query(False)):
     cached = cache.get(cache_key)
     if cached is None:
         target = CATEGORY_TO_SIGNAL[category]
-        all_signals = cache.get("all_signals") or await asyncio.to_thread(_refresh_signals)
+        all_signals = cache.get("all_signals") or await refresh_signals()
         cached = [r for r in all_signals if r["signal"] == target]
-        cache.set(cache_key, cached, ttl=CACHE_TTL_SECONDS)
+        cache.set(cache_key, cached, ttl=settings.cache_ttl_seconds)
 
     return {
         "category":  category,
         "signal":    CATEGORY_TO_SIGNAL.get(category),
         "count":     len(cached),
         "data":      cached,
-        "timestamp": datetime.now(IST).strftime("%H:%M:%S"),
+        "timestamp": now_ist().strftime("%H:%M:%S"),
     }
 
 
@@ -267,7 +426,7 @@ async def option_chain(symbol: str, refresh: bool = Query(False)):
 
     result = await asyncio.to_thread(get_option_chain_analysis, symbol)
 
-    # Never return 503 — return a structured response with error info
+    # Never return 503 ? return a structured response with error info
     # so the frontend can display a friendly message
     if "error" in result:
         logger.warning(f"Option chain error for {symbol}: {result['error']}")
@@ -287,7 +446,7 @@ async def option_chain(symbol: str, refresh: bool = Query(False)):
             }
         )
 
-    cache.set(cache_key, result, ttl=CACHE_TTL_SECONDS)
+    cache.set(cache_key, result, ttl=settings.cache_ttl_seconds)
     return {"source": "live", **result}
 
 
@@ -352,7 +511,7 @@ async def single_signal(symbol: str):
             symbol, ltp, price_chg, price_chg_p,
             int(oi), int(oi_chg), oi_chg_p, signal
         )
-        cache.set(cache_key, result, ttl=CACHE_TTL_SECONDS)
+        cache.set(cache_key, result, ttl=settings.cache_ttl_seconds)
         return {"source": "live", **result}
 
     except Exception as exc:
@@ -367,15 +526,17 @@ async def single_signal(symbol: str):
 @app.get("/api/debug")
 async def debug(x_debug_token: str = Header(default="")):
     """
-    Diagnostic endpoint — NSE connectivity + raw sample data.
+    Diagnostic endpoint ? NSE connectivity + raw sample data.
 
     Gated by DEBUG_TOKEN env var. This endpoint exposes raw upstream
     payloads and internal field-mapping state; leaving it wide open on a
     public deployment is fine for personal debugging but not something to
     call "production standard". Set DEBUG_TOKEN in Render's env vars to
-    lock it down — until you do, it stays open and says so explicitly.
+    lock it down ? until you do, it stays open and says so explicitly.
     """
-    if DEBUG_TOKEN and x_debug_token != DEBUG_TOKEN:
+    if not DEBUG_TOKEN:
+        raise HTTPException(status_code=404, detail="Diagnostic endpoint is disabled")
+    if x_debug_token != DEBUG_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid or missing X-Debug-Token header")
 
     conn   = await asyncio.to_thread(test_nse_connectivity)
@@ -386,14 +547,14 @@ async def debug(x_debug_token: str = Header(default="")):
     sample   = raw_rows[:3] if raw_rows else []
 
     return {
-        "timestamp":        datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST"),
+        "timestamp":        now_ist().strftime("%Y-%m-%d %H:%M:%S IST"),
         "market_status":    get_market_status(),
         "version":          APP_VERSION,
         "auth_protected":   bool(DEBUG_TOKEN),
         "cached_signals":   len(cached),
         "raw_rows_count":   len(raw_rows),
         "nse_endpoints":    conn,
-        "sample_row":       sample[0] if sample else {},   # ← shows real field names
+        "sample_row":       sample[0] if sample else {},   # ? shows real field names
         "sample_rows":      sample,
         "price_sources":    {r.get("symbol"): r.get("price_source") for r in sample},
         "oi_field_usage":   sample_field_usage(),

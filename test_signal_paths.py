@@ -97,3 +97,14 @@ def test_modest_valid_signal_is_not_discarded_as_low(monkeypatch):
     assert len(results) == 1
     assert results[0]["symbol"] == "MODESTCO"
     assert results[0]["confidence_tier"] == "MEDIUM"
+
+
+def test_zero_open_interest_is_not_treated_as_tradeable_liquidity():
+    result = _parse_row({
+        "symbol": "NO_OI", "underlyingValue": 500,
+        "pChange": 3.0, "change": 15,
+        "oi": 0, "oiChange": 30_000, "oiChangePct": 30.0,
+    })
+
+    assert result is not None
+    assert result["confidence_tier"] == "LOW"

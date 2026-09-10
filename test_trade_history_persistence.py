@@ -7,7 +7,7 @@ INDEX = Path(__file__).parent / "static" / "index.html"
 def test_trade_history_is_scoped_to_the_current_day():
     source = INDEX.read_text(encoding="utf-8")
     assert "one independent trade list per IST day" in source
-    assert "Daily history — resets at midnight IST" in source
+    assert "Daily history ? resets at midnight IST" in source
     assert "localStorage.getItem(`${STORAGE_KEY}:${today}`)" in source
     assert "Clear all saved trades? This cannot be undone." in source
 
@@ -42,3 +42,10 @@ def test_trade_history_has_indexeddb_redundant_backup():
     assert "saveTradesToIndexedDB(today, this.trades)" in source
     assert "loadTradesFromIndexedDB()" in source
     assert "!this._dailyStoragePresent" in source
+
+
+def test_dashboard_prefers_server_owned_history_when_available():
+    source = INDEX.read_text(encoding="utf-8")
+    assert "fetch('/api/history/today')" in source
+    assert "this.historySource = 'server';" in source
+    assert "Server history unavailable; using browser fallback" in source

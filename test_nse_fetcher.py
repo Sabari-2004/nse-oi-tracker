@@ -60,7 +60,7 @@ def test_native_price_change_is_never_overwritten_by_rolling_snapshot(monkeypatc
         {"data": [{"symbol": "XYZ", "underlyingValue": "100", "oi": 1000, "pChange": 1.25}]},
         # Second poll: underlying moved a lot in one minute (would produce a
         # huge synthetic pChange under the old buggy logic), but NSE still
-        # supplies its own native value — that must win.
+        # supplies its own native value ? that must win.
         {"data": [{"symbol": "XYZ", "underlyingValue": "140", "oi": 1000, "pChange": 1.40}]},
     ])
     monkeypatch.setattr(module._nse, "get", lambda *args, **kwargs: next(payloads))
@@ -96,6 +96,35 @@ def test_fetch_all_fno_oi_change_preserves_rows_with_invalid_price(monkeypatch):
 
 
     assert rows == [{"symbol": "ABC", "underlyingValue": "not-a-number"}]
+
+
+def test_absolute_price_change_does_not_mask_percent_change_fallback(monkeypatch):
+    module = importlib.reload(nse_fetcher)
+    payloads = iter([
+        {"data": [{"symbol": "ABC", "underlyingValue": "100", "change": "0.50"}]},
+        {"data": [{"symbol": "ABC", "underlyingValue": "102", "change": "2.00"}]},
+    ])
+    monkeypatch.setattr(module._nse, "get", lambda *args, **kwargs: next(payloads))
+
+    module.fetch_all_fno_oi_change()
+    second = module.fetch_all_fno_oi_change()
+
+    assert second[0]["pChange"] == 2.0
+    assert second[0]["price_source"] == "rolling_underlying_snapshot_fallback"
+
+
+def test_derivative_symbol_is_url_encoded(monkeypatch):
+    module = importlib.reload(nse_fetcher)
+    seen = {}
+
+    def seeded(**kwargs):
+        seen.update(kwargs)
+        return {"stocks": []}
+
+    monkeypatch.setattr(module._nse, "get_seeded", seeded)
+    module.fetch_quote_derivative("A&B")
+
+    assert "A%26B" in seen["api_url"]
   
 
 

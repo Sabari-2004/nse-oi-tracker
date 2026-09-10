@@ -32,6 +32,8 @@ def test_option_chain_returns_pcr_label_spot_and_intrinsic_max_pain():
     assert result["pcr_label"] == "Bullish"
     assert result["max_pain"] == 110
     assert result["spot_source"] == "records.underlyingValue"
+    assert result["oi_levels"]["pe_oi_support"] == 90
+    assert result["oi_levels"]["ce_oi_resistance"] == 90
 
 
 def test_cas_signal_constant_is_available():

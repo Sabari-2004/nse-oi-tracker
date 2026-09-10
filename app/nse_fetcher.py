@@ -1,8 +1,8 @@
-# nse_fetcher.py — Production NSE fetcher using curl-cffi Chrome impersonation
+# nse_fetcher.py ? Production NSE fetcher using curl-cffi Chrome impersonation
 #
 # WHY curl-cffi?
 # NSE uses Akamai Bot Manager (+ Cloudflare) for bot protection.
-# Both check the TLS fingerprint (JA3 hash) at the TCP level — before
+# Both check the TLS fingerprint (JA3 hash) at the TCP level ? before
 # any cookies or JS challenge. Standard requests/urllib3/cloudscraper
 # produce a non-browser JA3 hash that Akamai instantly flags as a bot.
 #
@@ -14,8 +14,11 @@
 
 import time
 import logging
+import random
+from collections import OrderedDict
 from threading import RLock
 from urllib.parse import quote
+from datetime import datetime
 from curl_cffi import requests as cffi_requests
 from app.config import SESSION_REFRESH_SECONDS
 
@@ -49,7 +52,7 @@ API_EXTRA = {
     "Sec-Fetch-Site":   "same-origin",
 }
 
-# Page navigation headers (for seed visits — looks like a real browser navigation)
+# Page navigation headers (for seed visits ? looks like a real browser navigation)
 NAV_EXTRA = {
     "Accept":         "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Sec-Fetch-Dest": "document",
@@ -97,7 +100,7 @@ class NSESession:
 
     def _build(self):
         """Seed a new session by visiting NSE pages in browser-like order."""
-        logger.info("Building NSE Chrome-impersonation session…")
+        logger.info("Building NSE Chrome-impersonation session?")
         sess = self._new_session()
 
         for url, referer in SEED_PAGES:
@@ -137,6 +140,11 @@ class NSESession:
             logger.warning(f"JSON parse error {label}: {e}")
             return None
 
+    @staticmethod
+    def _retry_delay(attempt: int) -> float:
+        """Bounded exponential backoff with jitter for rate-limit recovery."""
+        return min(20.0, 2.0 ** attempt) + random.uniform(0.0, 0.5)
+
     def _api_get(self, url: str, referer: str):
         """Raw API GET with JSON headers. Must hold lock."""
         self._sess.headers.update({**BASE_HEADERS, **API_EXTRA, "Referer": referer})
@@ -155,7 +163,7 @@ class NSESession:
             logger.warning(f"Nav error {url}: {e}")
             return None
 
-    # ── Public API ─────────────────────────────────────────────────────────────
+    # ?? Public API ?????????????????????????????????????????????????????????????
 
     def get(self, url: str, referer: str, retries: int = 2) -> dict | None:
         """Standard JSON API fetch with auto-retry on 4xx."""
@@ -170,10 +178,10 @@ class NSESession:
                 if code == 200:
                     return self._safe_json(resp, url)
                 if code in (401, 403, 429):
-                    logger.warning(f"HTTP {code} attempt {attempt+1} — rebuilding session: {url}")
+                    logger.warning(f"HTTP {code} attempt {attempt+1} ? rebuilding session: {url}")
                     self._sess      = self._build()
                     self._last_init = time.time()
-                    time.sleep(3 * (attempt + 1))
+                    time.sleep(self._retry_delay(attempt + 1))
                 elif code == 404:
                     logger.warning(f"HTTP 404 (endpoint removed): {url}")
                     return None
@@ -187,7 +195,7 @@ class NSESession:
                    retries: int = 3) -> dict | None:
         """
         Visit seed_url first (sets fresh per-symbol cookies), then call api_url.
-        Both in one lock acquisition — safe because RLock is re-entrant.
+        Both in one lock acquisition ? safe because RLock is re-entrant.
 
         Critical for option chain: NSE checks that the exact symbol page was
         visited right before the option chain API call.
@@ -213,16 +221,16 @@ class NSESession:
                     data = self._safe_json(api_resp, api_url)
                     if data is not None:
                         return data
-                    # 200 but HTML — session stale, rebuild
-                    logger.warning("200 but HTML body — rebuilding session")
+                    # 200 but HTML ? session stale, rebuild
+                    logger.warning("200 but HTML body ? rebuilding session")
                     self._sess      = self._build()
                     self._last_init = time.time()
-                    time.sleep(3)
+                    time.sleep(self._retry_delay(attempt + 1))
                 elif code in (401, 403, 429):
-                    logger.warning(f"HTTP {code} option-chain attempt {attempt+1} — rebuilding")
+                    logger.warning(f"HTTP {code} option-chain attempt {attempt+1} ? rebuilding")
                     self._sess      = self._build()
                     self._last_init = time.time()
-                    time.sleep(4 * (attempt + 1))
+                    time.sleep(self._retry_delay(attempt + 1))
                 elif code == 404:
                     logger.warning(f"HTTP 404 option-chain: {api_url}")
                     return None
@@ -234,21 +242,22 @@ class NSESession:
             return None
 
 
-# ── Singleton ──────────────────────────────────────────────────────────────────
+# ?? Singleton ??????????????????????????????????????????????????????????????????
 _nse = NSESession()
-_price_snapshots: dict[str, float] = {}
+_price_snapshots: OrderedDict[str, float] = OrderedDict()
 _price_snapshot_lock = RLock()
+MAX_PRICE_SNAPSHOTS = 1_000
 
 
-# ── Public data functions ──────────────────────────────────────────────────────
+# ?? Public data functions ??????????????????????????????????????????????????????
 
 # Field names that mean "NSE already told us the price change for this row".
-# If ANY of these are present, we trust NSE's own number — it's almost
+# If ANY of these are present, we trust NSE's own number ? it's almost
 # certainly a proper session/day-relative % change, which is the correct
 # basis for signal generation. We must never clobber it.
 _NATIVE_PRICE_CHANGE_FIELDS = (
     "pChange", "perChange", "changePer", "change_p", "perchange",
-    "pchange", "percentChange", "change", "priceChange", "netChange",
+    "pchange", "percentChange",
 )
 
 
@@ -261,13 +270,13 @@ def fetch_all_fno_oi_change() -> list[dict]:
     snapshot. That silently downgraded a proper day-relative % change into
     minute-level noise on every cycle after the first, which starved the
     HIGH-confidence signal filter (it compares that price delta against an
-    OI-change % that IS day/session relative — comparing two different
+    OI-change % that IS day/session relative ? comparing two different
     timeframes made the whole signal matrix statistically broken).
 
     Fixed behavior: NSE's own price-change fields are used whenever present.
     The rolling snapshot below is now only a FALLBACK for rows where NSE's
     payload genuinely omits any price-change field (this does happen for
-    some underlyings on this endpoint) — in that case only, we fall back to
+    some underlyings on this endpoint) ? in that case only, we fall back to
     a same-poll-interval delta so the row isn't dropped outright.
     """
     data = _nse.get(
@@ -302,10 +311,37 @@ def fetch_all_fno_oi_change() -> list[dict]:
                     enriched["pChange"] = ((current_price - previous_price) / previous_price) * 100
                     enriched["price_source"] = "rolling_underlying_snapshot_fallback"
                 _price_snapshots[symbol] = current_price
+                _price_snapshots.move_to_end(symbol)
+                while len(_price_snapshots) > MAX_PRICE_SNAPSHOTS:
+                    _price_snapshots.popitem(last=False)
             enriched_rows.append(enriched)
 
     logger.info(f"OI spurts: {len(enriched_rows)} F&O rows received")
     return enriched_rows
+
+
+def fetch_fno_holiday_calendar() -> dict[int, set]:
+    """Fetch the public NSE F&O holiday master and group dates by year.
+
+    NSE labels the F&O segment `FO`. Weekend entries are intentionally kept;
+    callers check weekends first and may still want the full published record.
+    """
+    data = _nse.get(
+        f"{NSE_BASE}/api/holiday-master?type=trading",
+        referer="https://www.nseindia.com/resources/exchange-communication-holidays",
+    )
+    if not isinstance(data, dict):
+        return {}
+    dates_by_year: dict[int, set] = {}
+    for row in data.get("FO", []):
+        raw_date = str(row.get("tradingDate") or "").strip()
+        try:
+            parsed = datetime.strptime(raw_date, "%d-%b-%Y").date()
+        except ValueError:
+            logger.warning("Unexpected NSE F&O holiday date: %r", raw_date)
+            continue
+        dates_by_year.setdefault(parsed.year, set()).add(parsed)
+    return dates_by_year
 
 
 def _fetch_option_chain(symbol: str, market_type: str) -> dict | None:
@@ -348,23 +384,24 @@ def fetch_option_chain_equity(symbol: str) -> dict | None:
 
 
 def fetch_quote_derivative(symbol: str) -> dict | None:
-    """Futures quote for a specific symbol — live price, OI, expiry."""
+    encoded_symbol = quote(symbol.upper().strip(), safe="")
+    """Futures quote for a specific symbol ? live price, OI, expiry."""
     return _nse.get_seeded(
-        seed_url     = f"{NSE_BASE}/get-quotes/derivatives?symbol={symbol}",
+        seed_url     = f"{NSE_BASE}/get-quotes/derivatives?symbol={encoded_symbol}",
         seed_referer = "https://www.nseindia.com/market-data/live-equity-market",
-        api_url      = f"{NSE_BASE}/api/quote-derivative?symbol={symbol}",
-        api_referer  = f"https://www.nseindia.com/get-quotes/derivatives?symbol={symbol}",
+        api_url      = f"{NSE_BASE}/api/quote-derivative?symbol={encoded_symbol}",
+        api_referer  = f"https://www.nseindia.com/get-quotes/derivatives?symbol={encoded_symbol}",
     )
 
 
 def test_nse_connectivity() -> dict:
     """
-    Diagnostic — test all key endpoints. Accessible via /api/debug.
+    Diagnostic ? test all key endpoints. Accessible via /api/debug.
 
     Note: whether curl-cffi's Chrome TLS impersonation actually bypasses
     Akamai depends partly on the deployment's egress region matching
     what was tested. Don't trust a comment claiming "confirmed working
-    from <region>" unless render.yaml actually pins that region — see
+    from <region>" unless render.yaml actually pins that region ? see
     render.yaml's `region:` field, which this app now sets explicitly.
     """
     results = {}
@@ -383,7 +420,7 @@ def test_nse_connectivity() -> dict:
                 results[name] = f"ok ({len(data)} rows)"
             else:
                 keys = list(data.keys())[:5]
-                results[name] = f"ok — keys: {keys}"
+                results[name] = f"ok ? keys: {keys}"
         except Exception as e:
             results[name] = f"error: {e}"
     return results
