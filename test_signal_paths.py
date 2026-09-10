@@ -35,6 +35,9 @@ def test_live_nse_field_names_produce_buy_signal():
     assert result["oi"] == 8021474
     assert result["oi_change"] == 1921846
     assert result["oi_change_pct"] > 0
+    assert result["trade_recommendation"] == "NO_TRADE"
+    assert result["actionable"] is False
+    assert result["validation_status"] == "MISSING_INDEPENDENT_CONFIRMATIONS"
 
 
 def test_live_nse_field_names_produce_sell_signal():

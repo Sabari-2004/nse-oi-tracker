@@ -49,3 +49,10 @@ def test_dashboard_prefers_server_owned_history_when_available():
     assert "fetch('/api/history/today')" in source
     assert "this.historySource = 'server';" in source
     assert "Server history unavailable; using browser fallback" in source
+
+
+def test_dashboard_does_not_offer_unvalidated_oi_candidates_as_trades():
+    source = INDEX.read_text(encoding="utf-8")
+    assert "OBSERVE ? NO TRADE" in source
+    assert "!row.actionable || historySource === 'server'" in source
+    assert "Needs validation" in source

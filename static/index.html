@@ -286,13 +286,17 @@
                   </span>
                 </td>
 
-                <!-- Direction badge -->
+                <!-- Recommendation / candidate boundary -->
                 <td class="px-3 py-2.5">
                   <span class="badge"
-                        :class="row.signal_direction==='BUY'
+                        :class="row.actionable && row.signal_direction==='BUY'
                           ? 'bg-blue-950 text-blue-300 border-blue-800'
-                          : 'bg-orange-950 text-orange-300 border-orange-800'"
-                        x-text="row.signal_direction==='BUY' ? '? BUY' : '? SELL'"></span>
+                          : row.actionable
+                            ? 'bg-orange-950 text-orange-300 border-orange-800'
+                            : 'bg-gray-800 text-amber-300 border-gray-700'"
+                        x-text="row.actionable
+                          ? (row.signal_direction==='BUY' ? '? BUY' : '? SELL')
+                          : 'OBSERVE ? NO TRADE'"></span>
                 </td>
 
                 <!-- LTP -->
@@ -312,19 +316,19 @@
 
                 <!-- Entry -->
                 <td class="px-3 py-2.5 text-right mono font-semibold lv-entry"
-                    x-text="'?' + fmt2(levels(row).entry)"></td>
+                    x-text="row.actionable ? '?' + fmt2(levels(row).entry) : '?'"></td>
 
                 <!-- TG1 -->
                 <td class="px-3 py-2.5 text-right mono lv-tg1"
-                    x-text="'?' + fmt2(levels(row).tg1)"></td>
+                    x-text="row.actionable ? '?' + fmt2(levels(row).tg1) : '?'"></td>
 
                 <!-- TG2 -->
                 <td class="px-3 py-2.5 text-right mono lv-tg2"
-                    x-text="'?' + fmt2(levels(row).tg2)"></td>
+                    x-text="row.actionable ? '?' + fmt2(levels(row).tg2) : '?'"></td>
 
                 <!-- SL -->
                 <td class="px-3 py-2.5 text-right mono lv-sl"
-                    x-text="'?' + fmt2(levels(row).sl)"></td>
+                    x-text="row.actionable ? '?' + fmt2(levels(row).sl) : '?'"></td>
 
                 <!-- Confidence tier -->
                 <td class="px-3 py-2.5">
@@ -346,12 +350,12 @@
                 <td class="px-3 py-2.5">
                   <div class="flex items-center gap-1.5">
                     <button @click="addTrade(row)"
-                            :disabled="historySource === 'server' || alreadyAdded(row.symbol)"
+                            :disabled="!row.actionable || historySource === 'server' || alreadyAdded(row.symbol)"
                             class="text-[10px] px-2 py-1 rounded border transition font-medium"
-                            :class="historySource === 'server' || alreadyAdded(row.symbol)
+                            :class="!row.actionable || historySource === 'server' || alreadyAdded(row.symbol)
                               ? 'bg-gray-800 text-gray-600 border-gray-700 cursor-not-allowed'
                               : 'bg-purple-900/40 hover:bg-purple-800 text-purple-300 border-purple-700 hover:text-white'">
-                      <span x-text="alreadyAdded(row.symbol) ? '? Added' : '+ Trade'"></span>
+                      <span x-text="!row.actionable ? 'Needs validation' : (alreadyAdded(row.symbol) ? '? Added' : '+ Trade')"></span>
                     </button>
                     <button @click="openChain(row.symbol)"
                             class="text-[10px] px-2 py-1 rounded bg-blue-900/30 hover:bg-blue-800/60

@@ -26,6 +26,7 @@ from app.nse_fetcher import (
     fetch_quote_derivative,
 )
 from analytics.option_chain import calculate_max_pain, classify_pcr, summarize_oi_levels
+from signal_engine.quality import oi_price_candidate
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +188,11 @@ def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
         conf = min(conf + 15, 100)
     tier = "LOW" if low_liquidity else confidence_tier(conf)
     strg = signal_strength(price_chg_p, oi_chg_p)
+    candidate = oi_price_candidate(
+        signal=signal,
+        bias=meta["bias"],
+        direction=meta["direction"],
+    )
     return {
         "symbol":           sym,
         "ltp":              round(ltp, 2),
@@ -203,8 +209,9 @@ def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
         "signal_direction": meta["direction"],
         "strength":         strg,
         "confidence":       conf,
-                "confidence_tier": tier,
+        "confidence_tier": tier,
         "is_cas_jump": bool(is_cas_jump),
+        **candidate,
     }
 
 
