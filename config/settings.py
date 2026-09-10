@@ -28,6 +28,20 @@ def _csv_values(name: str) -> tuple[str, ...]:
     )
 
 
+def _optional_url(name: str) -> str | None:
+    value = os.getenv(name, "").strip()
+    if not value:
+        return None
+    if not value.startswith(("https://", "http://")):
+        raise ValueError(f"{name} must be an HTTP(S) URL")
+    return value
+
+
+def _optional_secret(name: str) -> str | None:
+    """Read an optional token without logging or transforming its value."""
+    return os.getenv(name, "").strip() or None
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     """Environment-backed operational settings with safe local defaults."""
@@ -39,6 +53,11 @@ class Settings:
     debug_token: str | None
     history_retention_days: int
     cors_origins: tuple[str, ...]
+    alert_webhook_url: str | None
+    ntfy_topic_url: str | None
+    telegram_bot_token: str | None
+    telegram_chat_id: str | None
+    alert_min_confidence: int
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -56,6 +75,10 @@ class Settings:
             database_path = data_dir / database_path
 
         token = os.getenv("DEBUG_TOKEN", "").strip() or None
+        telegram_bot_token = _optional_secret("NSE_OI_TELEGRAM_BOT_TOKEN")
+        telegram_chat_id = _optional_secret("NSE_OI_TELEGRAM_CHAT_ID")
+        if bool(telegram_bot_token) != bool(telegram_chat_id):
+            raise ValueError("NSE_OI_TELEGRAM_BOT_TOKEN and NSE_OI_TELEGRAM_CHAT_ID must be set together")
         return cls(
             data_dir=data_dir,
             database_path=database_path,
@@ -67,6 +90,11 @@ class Settings:
             # needs no CORS exception. Configure origins only for a separate
             # dashboard host; a blank configuration is never a wildcard.
             cors_origins=_csv_values("NSE_OI_CORS_ORIGINS"),
+            alert_webhook_url=_optional_url("NSE_OI_ALERT_WEBHOOK_URL"),
+            ntfy_topic_url=_optional_url("NSE_OI_NTFY_TOPIC_URL"),
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id,
+            alert_min_confidence=_positive_int("NSE_OI_ALERT_MIN_CONFIDENCE", 80, minimum=1),
         )
 
 

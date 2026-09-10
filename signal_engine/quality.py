@@ -31,3 +31,56 @@ def oi_price_candidate(*, signal: str, bias: str, direction: str) -> dict[str, A
             "option-entry recommendation until independent confirmation is available."
         ),
     }
+
+
+def apply_daily_technical_context(
+    candidate: dict[str, Any], context: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach daily technical agreement without promoting a trade recommendation.
+
+    Daily bhavcopy data cannot establish intraday VWAP, event risk, or option
+    contract suitability. It can still report whether its independently
+    calculated trend and relative-volume evidence agrees with the observed
+    price/OI direction.
+    """
+    enriched = dict(candidate)
+    direction = str(enriched.get("observed_direction") or enriched.get("signal_direction") or "")
+    confirmed = list(enriched.get("confirmed_factors") or [])
+    missing = list(enriched.get("missing_confirmations") or [])
+    regime = context.get("regime")
+    relative_volume = context.get("relative_volume20")
+    alignment = "INSUFFICIENT_DAILY_HISTORY"
+
+    if context.get("validation_ready"):
+        if context.get("atr14") is not None:
+            confirmed.append("daily ATR context")
+        if context.get("daily_vwap_proxy20") is not None:
+            confirmed.append("daily VWAP proxy context")
+        if relative_volume is not None and float(relative_volume) >= 1.2:
+            confirmed.append("relative volume")
+        if direction == "BUY" and regime == "TREND_UP":
+            confirmed.append("EMA20/EMA50 trend")
+            alignment = "ALIGNED"
+        elif direction == "SELL" and regime == "TREND_DOWN":
+            confirmed.append("EMA20/EMA50 trend")
+            alignment = "ALIGNED"
+        else:
+            alignment = "CONFLICTING_OR_RANGE_BOUND"
+
+    # Preserve only genuinely unfulfilled requirements. Daily indicators
+    # reduce uncertainty but never substitute for intraday/external evidence.
+    if "EMA20/EMA50 trend" in confirmed:
+        missing = [item for item in missing if item != "EMA20/EMA50 trend"]
+    if "relative volume" in confirmed:
+        missing = [item for item in missing if item != "relative volume"]
+    enriched.update(
+        {
+            "technical_context": context,
+            "technical_alignment": alignment,
+            "confirmed_factors": list(dict.fromkeys(confirmed)),
+            "missing_confirmations": missing,
+            "trade_recommendation": "NO_TRADE",
+            "actionable": False,
+        }
+    )
+    return enriched

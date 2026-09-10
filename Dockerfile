@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY analytics ./analytics
+COPY alerts ./alerts
+COPY collector ./collector
 COPY config ./config
 COPY database ./database
 COPY signal_engine ./signal_engine

@@ -36,6 +36,14 @@ closed them. At 00:05 IST, prior-day events are archived from the visible API
 and kept locally for the retention period. No browser clock determines that
 lifecycle.
 
+`daily_equity_bars` holds normalized EQ-series daily candles from the public
+NSE bhavcopy. A weekday 18:10 IST job ingests the day when NSE has published
+it; it is safe for a missing/holiday archive to yield zero rows. The
+`/api/technical/{symbol}` endpoint uses this persisted daily series for
+EMA20/EMA50, ATR14, efficiency ratio, relative volume, a daily VWAP proxy,
+and daily regime classification. It explicitly distinguishes that proxy from
+intraday VWAP and reports missing history rather than inventing a signal.
+
 ## Scheduler and deployment rule
 
 The scheduler is intentionally in process, so run **exactly one** application
@@ -64,3 +72,21 @@ factors before a direction is presented as a complete trade recommendation.
 Only public/free sources may be used. Every source adapter must expose its
 timestamp/freshness and fail visibly rather than silently treating stale data
 as live. Public NSE endpoints can rate-limit or change without notice.
+
+## Module responsibilities
+
+- `app/`: FastAPI lifecycle, routes, cache, calendar, and public NSE adapter.
+- `collector/`: bounded full-file bhavcopy ingestion and backfill.
+- `collector/participant_oi.py`: NSE participant-wise OI end-of-day report
+  parsing and date-preserving normalization.
+- `analytics/`: technical/regime/CAS context, disclosure risk, option-chain
+  summaries, OI heatmap transformations, trap-risk checks, and candidate
+  outcome analysis.
+- `signal_engine/`: candidate-quality boundary and fallback risk-plan rules.
+- `alerts/`: opt-in webhook, ntfy, and Telegram delivery with durable
+  per-channel de-duplication.
+- `database/`: SQLite schema, immutable scans, events, option-chain snapshots,
+  disclosures, and alert-audit operations.
+
+The static dashboard is deliberately lightweight: it receives normalised
+server data and does not own the authoritative history lifecycle.

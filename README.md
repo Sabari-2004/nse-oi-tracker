@@ -5,6 +5,11 @@ option-chain analytics. This branch adds the production foundation for
 server-owned signal history, SQLite event storage, scheduled lifecycle jobs,
 and a dashboard migration path from browser-local history.
 
+The current build adds daily bhavcopy technical context, public VIX/FII-DII
+market context, corporate-disclosure event-risk labels, OI heatmaps, and
+auditable candidate-outcome analytics while retaining the same-origin
+lightweight dashboard.
+
 It is analytical decision support, not investment advice. Current OI labels
 are not a complete multi-factor trading signal.
 
@@ -50,6 +55,8 @@ durable external database before treating history as production data.
 - `GET /api/history/today` ? visible, server-owned IST-day signal events and
   lifecycle status.
 - `GET /api/analytics/today` ? server-calculated same-day outcomes.
+- `GET /api/technical/{symbol}` ? daily NSE-bhavcopy EMA/ATR/volume/regime
+  context. It is not an intraday VWAP or a standalone trading recommendation.
 
 `/api/debug` is disabled unless `DEBUG_TOKEN` is configured; pass it through
 the `X-Debug-Token` request header in a trusted environment.
@@ -57,6 +64,33 @@ the `X-Debug-Token` request header in a trusted environment.
 The bundled dashboard is served from the API's own origin. If deploying a
 separate dashboard, set `NSE_OI_CORS_ORIGINS` to its exact comma-separated
 HTTPS origins; it is deliberately blank by default.
+
+## Extended API
+
+- `GET /api/option-chain/{symbol}/heatmap` exposes relative CE/PE OI and
+  delta-OI intensity for the current chain window.
+- `GET /api/option-chain/{symbol}/history` returns stored PCR/max-pain data.
+- `GET /api/market-overview` and `/api/market-regime` expose public NSE
+  index/VIX/breadth/FII-DII context.
+- `GET /api/news` returns public NSE corporate disclosures with event-risk
+  labels; `GET /api/cas/{symbol}` exposes the candidate's volatility context.
+- `GET /api/participant-oi` returns the latest public NSE participant-wise
+  OI report and preserves its end-of-day report date (it is not intraday).
+- `GET /api/backtest` and `/api/backtest/export.csv` provide an auditable
+  candidate-event export, not an options-strategy performance claim.
+
+## Seed daily technical history
+
+The app ingests the newly published bhavcopy at 18:10 IST each weekday. To
+seed enough public NSE daily history for EMA50 and ATR validation immediately,
+run this bounded, rate-limited command once (it never uses a paid API):
+
+```powershell
+.\.venv\Scripts\python -m collector.backfill --days 60 --max-downloads 60
+```
+
+The command skips dates already stored and only requests known weekday NSE
+trading dates. It is safe to rerun after a network interruption.
 
 ## Verification
 
@@ -66,4 +100,7 @@ HTTPS origins; it is deliberately blank by default.
 ```
 
 See [architecture](docs/architecture.md) for data ownership, scheduler rules,
-and the current signal-quality boundary.
+and the current signal-quality boundary. See [signal logic](docs/signal-logic.md),
+[API reference](docs/api.md), [scheduler flow](docs/scheduler.md),
+[deployment](docs/deployment.md), and [troubleshooting](docs/troubleshooting.md)
+for operating guidance.

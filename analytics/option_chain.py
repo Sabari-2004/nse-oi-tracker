@@ -58,3 +58,25 @@ def summarize_oi_levels(strikes: Iterable[Mapping[str, Any]]) -> dict[str, float
         "pe_writing_zone": _highest_strike(rows, "pe_doi", positive_only=True),
         "ce_writing_zone": _highest_strike(rows, "ce_doi", positive_only=True),
     }
+
+
+def summarize_pcr_trend(snapshots: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Describe a stored PCR/max-pain sequence without assigning a trade side."""
+    rows = list(snapshots)
+    if not rows:
+        return {
+            "samples": 0,
+            "pcr_change": None,
+            "max_pain_change": None,
+            "pcr_state": "INSUFFICIENT_HISTORY",
+        }
+    latest = rows[-1]
+    first = rows[0]
+    pcr_change = float(latest["pcr"]) - float(first["pcr"])
+    pain_change = float(latest["max_pain"]) - float(first["max_pain"])
+    return {
+        "samples": len(rows),
+        "pcr_change": round(pcr_change, 4),
+        "max_pain_change": round(pain_change, 4),
+        "pcr_state": "RISING" if pcr_change > 0.03 else "FALLING" if pcr_change < -0.03 else "STABLE",
+    }

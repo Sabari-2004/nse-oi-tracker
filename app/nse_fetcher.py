@@ -18,7 +18,7 @@ import random
 from collections import OrderedDict
 from threading import RLock
 from urllib.parse import quote
-from datetime import datetime
+from datetime import date, datetime
 from curl_cffi import requests as cffi_requests
 from app.config import SESSION_REFRESH_SECONDS
 
@@ -190,6 +190,25 @@ class NSESession:
                     return None
             return None
 
+    def get_text(self, url: str, referer: str, retries: int = 2) -> str | None:
+        """Fetch a public text asset, retaining the same session/retry policy."""
+        with self._lock:
+            self._ensure()
+            for attempt in range(retries):
+                resp = self._api_get(url, referer)
+                if resp is None:
+                    time.sleep(self._retry_delay(attempt + 1))
+                    continue
+                if resp.status_code == 200 and resp.content:
+                    return resp.text
+                if resp.status_code in (401, 403, 429, 503):
+                    logger.warning("HTTP %s fetching text asset; retrying %s", resp.status_code, url)
+                    time.sleep(self._retry_delay(attempt + 1))
+                    continue
+                logger.warning("HTTP %s fetching text asset: %s", resp.status_code, url)
+                return None
+            return None
+
     def get_seeded(self, seed_url: str, seed_referer: str,
                    api_url: str, api_referer: str,
                    retries: int = 3) -> dict | None:
@@ -342,6 +361,59 @@ def fetch_fno_holiday_calendar() -> dict[int, set]:
             continue
         dates_by_year.setdefault(parsed.year, set()).add(parsed)
     return dates_by_year
+
+
+def fetch_equity_bhavcopy(trade_date: date) -> str | None:
+    """Fetch NSE's public full-equity bhavcopy for one trading date.
+
+    One archive file contains all equities, so callers should download it once
+    per day and persist the parsed rows rather than issue one request per
+    symbol. NSE does not publish a bhavcopy on market holidays.
+    """
+    filename = f"sec_bhavdata_full_{trade_date.strftime('%d%m%Y')}.csv"
+    return _nse.get_text(
+        f"https://nsearchives.nseindia.com/products/content/{filename}",
+        referer="https://www.nseindia.com/market-data/all-upcoming-issues-ipo",
+    )
+
+
+def fetch_participant_oi_report(trade_date: date) -> str | None:
+    """Fetch the NSE F&O participant-wise OI end-of-day CSV for one date.
+
+    NSE publishes this report after market close.  It must not be presented as
+    an intraday participant-position feed; callers retain its report date.
+    """
+    filename = f"fao_participant_oi_{trade_date.strftime('%d%m%Y')}.csv"
+    return _nse.get_text(
+        f"https://nsearchives.nseindia.com/content/nsccl/{filename}",
+        referer=f"{NSE_BASE}/all-reports-derivatives",
+    )
+
+
+def fetch_market_indices() -> dict | None:
+    """Fetch the public NSE broad-index feed, including INDIA VIX/breadth."""
+    return _nse.get(
+        f"{NSE_BASE}/api/allIndices",
+        referer=f"{NSE_BASE}/market-data/live-market-indices",
+    )
+
+
+def fetch_fii_dii_activity() -> list[dict]:
+    """Fetch the public NSE FII/FPI and DII cash-market activity rows."""
+    data = _nse.get(
+        f"{NSE_BASE}/api/fiidiiTradeReact",
+        referer=f"{NSE_BASE}/market-data/fii-dii-trading-activity",
+    )
+    return data if isinstance(data, list) else []
+
+
+def fetch_corporate_announcements() -> list[dict]:
+    """Fetch the latest public NSE equity corporate-announcement feed."""
+    data = _nse.get(
+        f"{NSE_BASE}/api/corporate-announcements?index=equities",
+        referer=f"{NSE_BASE}/companies-listing/corporate-filings-announcements",
+    )
+    return data if isinstance(data, list) else []
 
 
 def _fetch_option_chain(symbol: str, market_type: str) -> dict | None:

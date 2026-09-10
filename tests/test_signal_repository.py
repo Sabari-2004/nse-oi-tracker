@@ -74,3 +74,48 @@ def test_previous_day_events_are_hidden_after_rollover(tmp_path):
     assert old_total == 0
     assert current_total == 1
     assert current_events[0]["symbol"] == "TODAY"
+
+
+def test_daily_equity_bars_are_upserted_and_returned_chronologically(tmp_path):
+    repository = SignalRepository(tmp_path / "tracker.sqlite3")
+    bars = [
+        {"trade_date": "2026-09-10", "symbol": "RELIANCE", "open": 1400, "high": 1420, "low": 1390, "close": 1410, "volume": 100},
+        {"trade_date": "2026-09-11", "symbol": "RELIANCE", "open": 1411, "high": 1430, "low": 1400, "close": 1425, "volume": 120},
+    ]
+
+    assert repository.upsert_daily_equity_bars(bars) == 2
+    assert repository.upsert_daily_equity_bars([{**bars[0], "close": 1412}]) == 1
+    rows = repository.daily_equity_bars_for_symbol("reliance")
+
+    assert [row["trade_date"] for row in rows] == ["2026-09-10", "2026-09-11"]
+    assert rows[0]["close"] == 1412.0
+    multi = repository.daily_equity_bars_for_symbols(["RELIANCE", "MISSING"])
+    assert [row["trade_date"] for row in multi["RELIANCE"]] == ["2026-09-10", "2026-09-11"]
+    assert multi["MISSING"] == []
+    assert repository.daily_equity_bar_summary()["bars"] == 2
+
+
+def test_option_chain_snapshots_are_immutable_per_minute_and_timeline_is_chronological(tmp_path):
+    repository = SignalRepository(tmp_path / "tracker.sqlite3")
+    first = datetime(2026, 9, 10, 10, 0, tzinfo=IST)
+    chain = {
+        "symbol": "NIFTY", "expiry": "11-Sep-2026", "atm_strike": 25000,
+        "pcr": 0.9, "max_pain": 24900, "total_ce_oi": 100, "total_pe_oi": 90,
+        "oi_levels": {"pe_oi_support": 24800},
+    }
+    assert repository.record_option_chain_snapshot(chain, first) is True
+    assert repository.record_option_chain_snapshot(chain, first) is False
+    assert repository.record_option_chain_snapshot({**chain, "pcr": 1.0}, first + timedelta(minutes=1)) is True
+    history = repository.option_chain_history("NIFTY")
+    assert [row["pcr"] for row in history] == [0.9, 1.0]
+    assert history[0]["oi_levels"]["pe_oi_support"] == 24800
+
+
+def test_corporate_announcements_are_upserted_and_filterable(tmp_path):
+    repository = SignalRepository(tmp_path / "tracker.sqlite3")
+    row = {"announcement_id": "a1", "symbol": "RELIANCE", "published_at": "2026-09-10 10:00:00", "category": "Results", "title": "Results announced", "attachment_url": None, "event_risk": "HIGH_EVENT_RISK", "risk_terms": ["results"]}
+    assert repository.upsert_corporate_announcements([row]) == 1
+    assert repository.upsert_corporate_announcements([{**row, "title": "Updated results"}]) == 1
+    records = repository.recent_corporate_announcements(symbol="reliance")
+    assert records[0]["title"] == "Updated results"
+    assert records[0]["risk_terms"] == ["results"]

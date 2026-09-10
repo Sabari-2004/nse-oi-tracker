@@ -1,0 +1,53 @@
+"""NSE equity bhavcopy parsing and collection."""
+
+from __future__ import annotations
+
+import csv
+from datetime import date, datetime
+from io import StringIO
+
+from app.nse_fetcher import fetch_equity_bhavcopy
+
+
+def _number(value: object) -> float:
+    try:
+        return float(str(value or "").replace(",", ""))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def parse_equity_bhavcopy(csv_text: str) -> list[dict[str, float | str]]:
+    """Return normalized EQ-series daily bars from one public NSE archive."""
+    bars: list[dict[str, float | str]] = []
+    # NSE's full bhavcopy headers include a space after each comma.  Let the
+    # CSV parser consume that formatting rather than silently treating every
+    # row as a non-EQ series.
+    for row in csv.DictReader(StringIO(csv_text), skipinitialspace=True):
+        if str(row.get("SERIES") or "").strip().upper() != "EQ":
+            continue
+        symbol = str(row.get("SYMBOL") or "").strip().upper()
+        raw_date = str(row.get("DATE1") or "").strip()
+        try:
+            trade_date = datetime.strptime(raw_date, "%d-%b-%Y").date().isoformat()
+        except ValueError:
+            continue
+        if not symbol:
+            continue
+        bars.append(
+            {
+                "symbol": symbol,
+                "trade_date": trade_date,
+                "open": _number(row.get("OPEN_PRICE")),
+                "high": _number(row.get("HIGH_PRICE")),
+                "low": _number(row.get("LOW_PRICE")),
+                "close": _number(row.get("CLOSE_PRICE")),
+                "volume": _number(row.get("TTL_TRD_QNTY")),
+            }
+        )
+    return bars
+
+
+def collect_equity_bhavcopy(trade_date: date) -> list[dict[str, float | str]]:
+    """Download and parse all EQ daily bars, returning an empty list on gaps."""
+    content = fetch_equity_bhavcopy(trade_date)
+    return parse_equity_bhavcopy(content) if content else []

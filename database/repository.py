@@ -93,6 +93,83 @@ class SignalRepository:
                     ON signal_events(trade_date, archived, captured_at_ist DESC);
                 CREATE INDEX IF NOT EXISTS idx_event_open_symbol
                     ON signal_events(trade_date, status, symbol);
+
+                CREATE TABLE IF NOT EXISTS daily_equity_bars (
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    open REAL NOT NULL,
+                    high REAL NOT NULL,
+                    low REAL NOT NULL,
+                    close REAL NOT NULL,
+                    volume REAL NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'nse_bhavcopy',
+                    ingested_at_utc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(trade_date, symbol)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_daily_equity_symbol_date
+                    ON daily_equity_bars(symbol, trade_date DESC);
+
+                CREATE TABLE IF NOT EXISTS option_chain_snapshots (
+                    id INTEGER PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    expiry TEXT NOT NULL,
+                    captured_at_ist TEXT NOT NULL,
+                    captured_minute_ist TEXT NOT NULL,
+                    spot REAL NOT NULL,
+                    pcr REAL NOT NULL,
+                    max_pain REAL NOT NULL,
+                    total_ce_oi INTEGER NOT NULL,
+                    total_pe_oi INTEGER NOT NULL,
+                    oi_levels_json TEXT NOT NULL,
+                    UNIQUE(symbol, expiry, captured_minute_ist)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_chain_snapshot_symbol_time
+                    ON option_chain_snapshots(symbol, captured_at_ist DESC);
+
+                CREATE TABLE IF NOT EXISTS alert_deliveries (
+                    id INTEGER PRIMARY KEY,
+                    alert_key TEXT NOT NULL UNIQUE,
+                    trade_date TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    detail TEXT,
+                    created_at_ist TEXT NOT NULL,
+                    delivered_at_ist TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_alert_trade_date
+                    ON alert_deliveries(trade_date, created_at_ist DESC);
+
+                CREATE TABLE IF NOT EXISTS corporate_announcements (
+                    announcement_id TEXT PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    published_at TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    attachment_url TEXT,
+                    event_risk TEXT NOT NULL,
+                    risk_terms_json TEXT NOT NULL,
+                    ingested_at_utc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_announcement_symbol_time
+                    ON corporate_announcements(symbol, published_at DESC);
+
+                CREATE TABLE IF NOT EXISTS participant_oi_reports (
+                    report_date TEXT NOT NULL,
+                    participant TEXT NOT NULL,
+                    net_index_futures INTEGER NOT NULL,
+                    net_stock_futures INTEGER NOT NULL,
+                    measures_json TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    ingested_at_utc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(report_date, participant)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_participant_oi_date
+                    ON participant_oi_reports(report_date DESC);
                 """
             )
             columns = {
@@ -103,6 +180,290 @@ class SignalRepository:
                 connection.execute(
                     "ALTER TABLE signal_events ADD COLUMN max_target_hit INTEGER NOT NULL DEFAULT 0"
                 )
+
+    def upsert_daily_equity_bars(self, bars: Iterable[dict[str, Any]]) -> int:
+        """Store one full daily NSE bhavcopy, replacing only matching date/symbol bars."""
+        rows = [
+            (
+                str(bar.get("trade_date") or ""),
+                str(bar.get("symbol") or "").upper(),
+                float(bar.get("open") or 0),
+                float(bar.get("high") or 0),
+                float(bar.get("low") or 0),
+                float(bar.get("close") or 0),
+                float(bar.get("volume") or 0),
+            )
+            for bar in bars
+            if bar.get("trade_date") and bar.get("symbol") and float(bar.get("close") or 0) > 0
+        ]
+        if not rows:
+            return 0
+        with self._connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO daily_equity_bars (
+                    trade_date, symbol, open, high, low, close, volume
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trade_date, symbol) DO UPDATE SET
+                    open = excluded.open,
+                    high = excluded.high,
+                    low = excluded.low,
+                    close = excluded.close,
+                    volume = excluded.volume,
+                    source = excluded.source,
+                    ingested_at_utc = CURRENT_TIMESTAMP
+                """,
+                rows,
+            )
+        return len(rows)
+
+    def daily_equity_bars_for_symbol(self, symbol: str, *, limit: int = 90) -> list[dict[str, Any]]:
+        """Return a chronological, bounded daily NSE-bar series for one ticker."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT trade_date, open, high, low, close, volume
+                FROM daily_equity_bars
+                WHERE symbol = ?
+                ORDER BY trade_date DESC
+                LIMIT ?
+                """,
+                (symbol.upper().strip(), limit),
+            ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
+    def daily_equity_trade_dates(self) -> set[str]:
+        """Return all dates for which at least one normalized bhavcopy bar exists."""
+        with self._connect() as connection:
+            rows = connection.execute("SELECT DISTINCT trade_date FROM daily_equity_bars").fetchall()
+        return {str(row["trade_date"]) for row in rows}
+
+    def daily_equity_bars_for_symbols(self, symbols: Iterable[str], *, limit_per_symbol: int = 90) -> dict[str, list[dict[str, Any]]]:
+        """Return chronological daily bars for multiple symbols in one query."""
+        normalized = sorted({str(symbol).upper().strip() for symbol in symbols if str(symbol).strip()})
+        if not normalized:
+            return {}
+        placeholders = ",".join("?" for _ in normalized)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT symbol, trade_date, open, high, low, close, volume
+                FROM (
+                    SELECT symbol, trade_date, open, high, low, close, volume,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY symbol ORDER BY trade_date DESC
+                           ) AS position
+                    FROM daily_equity_bars
+                    WHERE symbol IN ({placeholders})
+                )
+                WHERE position <= ?
+                ORDER BY symbol, trade_date ASC
+                """,
+                (*normalized, limit_per_symbol),
+            ).fetchall()
+        result: dict[str, list[dict[str, Any]]] = {symbol: [] for symbol in normalized}
+        for row in rows:
+            record = dict(row)
+            result[str(record.pop("symbol"))].append(record)
+        return result
+
+    def daily_equity_bar_summary(self) -> dict[str, Any]:
+        """Compact technical-data freshness diagnostics for /api/health."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS bars, COUNT(DISTINCT symbol) AS symbols, MAX(trade_date) AS latest_trade_date FROM daily_equity_bars"
+            ).fetchone()
+        return dict(row)
+
+    def record_option_chain_snapshot(self, analysis: dict[str, Any], captured_at: datetime) -> bool:
+        """Store one immutable public option-chain observation per symbol/minute."""
+        captured_at = as_ist(captured_at)
+        symbol = str(analysis.get("symbol") or "").upper().strip()
+        expiry = str(analysis.get("expiry") or "UNKNOWN")
+        if not symbol or float(analysis.get("pcr") or 0) < 0:
+            return False
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO option_chain_snapshots (
+                    symbol, expiry, captured_at_ist, captured_minute_ist, spot, pcr,
+                    max_pain, total_ce_oi, total_pe_oi, oi_levels_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    symbol,
+                    expiry,
+                    captured_at.isoformat(),
+                    captured_at.strftime("%Y-%m-%dT%H:%M"),
+                    float(analysis.get("atm_strike") or 0),
+                    float(analysis.get("pcr") or 0),
+                    float(analysis.get("max_pain") or 0),
+                    int(analysis.get("total_ce_oi") or 0),
+                    int(analysis.get("total_pe_oi") or 0),
+                    json.dumps(analysis.get("oi_levels") or {}, sort_keys=True),
+                ),
+            )
+        return cursor.rowcount > 0
+
+    def option_chain_history(self, symbol: str, *, limit: int = 200) -> list[dict[str, Any]]:
+        """Return chronological PCR/max-pain observations for a symbol."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT captured_at_ist, expiry, spot, pcr, max_pain, total_ce_oi, total_pe_oi, oi_levels_json
+                FROM option_chain_snapshots
+                WHERE symbol = ?
+                ORDER BY captured_at_ist DESC
+                LIMIT ?
+                """,
+                (symbol.upper().strip(), limit),
+            ).fetchall()
+        return [
+            {
+                **dict(row),
+                "oi_levels": json.loads(str(row["oi_levels_json"])),
+            }
+            for row in reversed(rows)
+        ]
+
+    def backtest_events(self, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        """Return stored candidate events, including archive, for transparent analysis."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT captured_at_ist, trade_date, symbol, signal, direction, confidence,
+                       entry, stop_loss, target_1, target_2, risk_reward, risk_source,
+                       current_price, exit_price, max_target_hit, status, result, payload_json
+                FROM signal_events
+                WHERE trade_date BETWEEN ? AND ?
+                ORDER BY captured_at_ist ASC, id ASC
+                """,
+                (start_date, end_date),
+            ).fetchall()
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            event = dict(row)
+            payload = json.loads(str(event.pop("payload_json") or "{}"))
+            # Sector is the scan-time display taxonomy. Older events stay
+            # visibly unclassified instead of being rewritten by a newer map.
+            event["sector"] = payload.get("sector") or "Unclassified"
+            events.append(event)
+        return events
+
+    def reserve_alert(self, alert_key: str, channel: str, observed_at: datetime) -> bool:
+        """Reserve an idempotent alert before network delivery."""
+        observed_at = as_ist(observed_at)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO alert_deliveries (
+                    alert_key, trade_date, channel, status, created_at_ist
+                ) VALUES (?, ?, ?, 'PENDING', ?)
+                """,
+                (alert_key, ist_trade_date(observed_at), channel, observed_at.isoformat()),
+            )
+        return cursor.rowcount > 0
+
+    def complete_alert(self, alert_key: str, *, delivered: bool, detail: str, observed_at: datetime) -> None:
+        """Record a delivery result without exposing endpoint secrets."""
+        observed_at = as_ist(observed_at)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE alert_deliveries
+                SET status = ?, detail = ?, delivered_at_ist = ?
+                WHERE alert_key = ?
+                """,
+                ("DELIVERED" if delivered else "FAILED", detail[:500], observed_at.isoformat(), alert_key),
+            )
+
+    def upsert_corporate_announcements(self, announcements: Iterable[dict[str, Any]]) -> int:
+        """Persist public NSE disclosure metadata; never download attachment content."""
+        rows = [
+            (
+                str(item["announcement_id"]), str(item["symbol"]).upper(), str(item["published_at"]),
+                str(item["category"]), str(item["title"]), item.get("attachment_url"),
+                str(item["event_risk"]), json.dumps(item.get("risk_terms") or []),
+            )
+            for item in announcements
+        ]
+        if not rows:
+            return 0
+        with self._connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO corporate_announcements (
+                    announcement_id, symbol, published_at, category, title, attachment_url,
+                    event_risk, risk_terms_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(announcement_id) DO UPDATE SET
+                    symbol=excluded.symbol, published_at=excluded.published_at,
+                    category=excluded.category, title=excluded.title,
+                    attachment_url=excluded.attachment_url, event_risk=excluded.event_risk,
+                    risk_terms_json=excluded.risk_terms_json, ingested_at_utc=CURRENT_TIMESTAMP
+                """,
+                rows,
+            )
+        return len(rows)
+
+    def recent_corporate_announcements(self, *, symbol: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        """Return stored public disclosure metadata, newest first."""
+        query = "SELECT * FROM corporate_announcements"
+        params: tuple[Any, ...] = ()
+        if symbol:
+            query += " WHERE symbol = ?"
+            params = (symbol.upper().strip(),)
+        query += " ORDER BY published_at DESC LIMIT ?"
+        with self._connect() as connection:
+            rows = connection.execute(query, (*params, limit)).fetchall()
+        return [{**dict(row), "risk_terms": json.loads(str(row["risk_terms_json"]))} for row in rows]
+
+    def upsert_participant_oi(self, rows: Iterable[dict[str, Any]]) -> int:
+        """Persist one public end-of-day participant OI report by report date."""
+        records = [
+            (
+                str(row["report_date"]), str(row["participant"]).upper(),
+                int(row.get("net_index_futures") or 0), int(row.get("net_stock_futures") or 0),
+                json.dumps(row.get("measures") or {}, sort_keys=True),
+                str(row.get("source") or "NSE F&O participant-wise OI EOD report"),
+            )
+            for row in rows
+        ]
+        if not records:
+            return 0
+        with self._connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO participant_oi_reports (
+                    report_date, participant, net_index_futures, net_stock_futures, measures_json, source
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(report_date, participant) DO UPDATE SET
+                    net_index_futures=excluded.net_index_futures,
+                    net_stock_futures=excluded.net_stock_futures,
+                    measures_json=excluded.measures_json, source=excluded.source,
+                    ingested_at_utc=CURRENT_TIMESTAMP
+                """,
+                records,
+            )
+        return len(records)
+
+    def latest_participant_oi(self) -> dict[str, Any]:
+        """Return the latest complete public EOD report, preserving its date."""
+        with self._connect() as connection:
+            date_row = connection.execute("SELECT MAX(report_date) AS report_date FROM participant_oi_reports").fetchone()
+            report_date = date_row["report_date"] if date_row else None
+            if not report_date:
+                return {"report_date": None, "participants": []}
+            rows = connection.execute(
+                """
+                SELECT report_date, participant, net_index_futures, net_stock_futures, measures_json, source
+                FROM participant_oi_reports WHERE report_date = ? ORDER BY participant
+                """, (report_date,)
+            ).fetchall()
+        return {
+            "report_date": str(report_date),
+            "participants": [{**dict(row), "measures": json.loads(str(row["measures_json"]))} for row in rows],
+        }
 
     @staticmethod
     def _fingerprint(signals: Iterable[dict[str, Any]]) -> str:

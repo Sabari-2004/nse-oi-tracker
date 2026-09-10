@@ -56,3 +56,18 @@ def test_dashboard_does_not_offer_unvalidated_oi_candidates_as_trades():
     assert "OBSERVE ? NO TRADE" in source
     assert "!row.actionable || historySource === 'server'" in source
     assert "Needs validation" in source
+
+
+def test_dashboard_renders_public_market_context_with_a_data_caveat():
+    source = INDEX.read_text(encoding="utf-8")
+    assert "Market Context ? Public NSE Data" in source
+    assert "fetchMarketOverview" in source
+    assert "FII/FPI cash net" in source
+
+
+def test_dashboard_displays_descriptive_pcr_timeline():
+    source = INDEX.read_text(encoding="utf-8")
+    assert "PCR timeline" in source
+    assert "Max pain shift" in source
+    assert "stored public option-chain observations" in source
+    assert "Context only ? not a trade signal" in source

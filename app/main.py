@@ -5,7 +5,9 @@
 import logging
 import asyncio
 import time
-from datetime import datetime
+import csv
+import io
+from datetime import datetime, timedelta
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -14,7 +16,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, HTTPException, Query, Header
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 import app.oi_analyzer as oi_engine
@@ -40,14 +42,33 @@ from app.oi_analyzer import (
 )
 from app.nse_fetcher import (
     fetch_all_fno_oi_change,
+    fetch_fii_dii_activity,
+    fetch_corporate_announcements,
+    fetch_market_indices,
     fetch_quote_derivative,
     test_nse_connectivity,
 )
+from analytics.technical import technical_context
+from collector.bhavcopy import collect_equity_bhavcopy
+from collector.participant_oi import collect_participant_oi
+from signal_engine.quality import apply_daily_technical_context
+from analytics.market_overview import normalize_market_overview
+from analytics.option_chain import summarize_pcr_trend
+from analytics.backtest import summarize_candidate_backtest
+from alerts.dispatcher import dispatch_candidate_alert
+from analytics.news import latest_event_risk, normalize_nse_announcements
+from analytics.sectors import attach_sector, known_sectors
+from analytics.cas import confidence_analysis
+from analytics.regime import classify_market_regime
+from analytics.oi_heatmap import option_oi_heatmap
+from analytics.traps import trap_risk
+from analytics.intelligence import build_market_intelligence
+from analytics.sources import public_source_inventory
 from config.settings import get_settings
 from database.repository import SignalRepository
 from utils.time import IST, now_ist, ist_trade_date
 
-APP_VERSION = "4.3.0"
+APP_VERSION = "4.4.0"
 settings = get_settings()
 repository = SignalRepository(settings.database_path)
 
@@ -91,6 +112,47 @@ def _refresh_signals() -> list[dict]:
     global _last_good_signals, _last_good_signals_at
     global _last_refresh_at_ist, _last_refresh_was_stale, _last_snapshot_id
     signals = scan_all_fno_realtime()
+    signals = [attach_sector(signal) for signal in signals]
+    if signals:
+        try:
+            bars_by_symbol = repository.daily_equity_bars_for_symbols(
+                (str(signal.get("symbol") or "") for signal in signals)
+            )
+            signals = [
+                apply_daily_technical_context(
+                    signal,
+                    technical_context(bars_by_symbol.get(str(signal.get("symbol") or ""), [])),
+                )
+                for signal in signals
+            ]
+            signals = [{
+                **signal,
+                "trap_context": trap_risk(signal, signal.get("technical_context")),
+            } for signal in signals]
+        except Exception:
+            logger.exception("Could not attach daily technical context to scanner results")
+        try:
+            announcements = normalize_nse_announcements(fetch_corporate_announcements())
+            repository.upsert_corporate_announcements(announcements)
+            signals = [{**signal, "news_context": latest_event_risk(announcements, str(signal.get("symbol") or ""))} for signal in signals]
+        except Exception:
+            logger.exception("Could not attach NSE disclosure context to scanner results")
+        try:
+            market_context = normalize_market_overview(
+                fetch_market_indices(), fetch_fii_dii_activity(),
+            )
+            cache.set("market-overview", market_context, ttl=settings.cache_ttl_seconds)
+            signals = [
+                {
+                    **signal,
+                    "cas_context": confidence_analysis(
+                        signal.get("technical_context"), signal.get("news_context"), market_context,
+                    ),
+                }
+                for signal in signals
+            ]
+        except Exception:
+            logger.exception("Could not attach public VIX/regime/CAS context to scanner results")
     monotonic_now = time.monotonic()
     captured_at = now_ist()
     served_stale = False
@@ -109,6 +171,35 @@ def _refresh_signals() -> list[dict]:
             repository.update_open_events(signals, captured_at)
         except Exception:
             logger.exception("Could not persist scan history")
+
+        # Alert delivery is opt-in. Per-symbol/day/channel dedup prevents a
+        # frequent scanner refresh from becoming a notification storm.
+        if settings.alert_webhook_url or settings.ntfy_topic_url or settings.telegram_bot_token:
+            for signal in signals:
+                if int(signal.get("confidence") or 0) < settings.alert_min_confidence:
+                    continue
+                for channel, endpoint in (
+                    ("webhook", settings.alert_webhook_url),
+                    ("ntfy", settings.ntfy_topic_url),
+                    ("telegram", settings.telegram_bot_token),
+                ):
+                    if not endpoint:
+                        continue
+                    key = f"candidate:{ist_trade_date(captured_at)}:{signal.get('symbol')}:{channel}"
+                    if not repository.reserve_alert(key, channel, captured_at):
+                        continue
+                    deliveries = dispatch_candidate_alert(
+                        signal,
+                        webhook_url=endpoint if channel == "webhook" else None,
+                        ntfy_topic_url=endpoint if channel == "ntfy" else None,
+                        telegram_bot_token=endpoint if channel == "telegram" else None,
+                        telegram_chat_id=settings.telegram_chat_id if channel == "telegram" else None,
+                    )
+                    for delivery in deliveries:
+                        repository.complete_alert(
+                            key, delivered=delivery.delivered, detail=delivery.detail,
+                            observed_at=captured_at,
+                        )
 
     _last_refresh_at_ist = captured_at.isoformat()
     _last_refresh_was_stale = served_stale
@@ -165,6 +256,44 @@ async def scheduled_holiday_calendar_refresh() -> None:
         logger.info("NSE holiday calendar refreshed for %s", result["years"])
     else:
         logger.warning("NSE holiday calendar refresh failed; using bundled dates")
+
+
+async def ingest_daily_bhavcopy(trade_date: str | None = None) -> int:
+    """Collect one public NSE daily equity file and persist normalized bars."""
+    target_date = datetime.fromisoformat(trade_date).date() if trade_date else now_ist().date()
+    try:
+        bars = await asyncio.to_thread(collect_equity_bhavcopy, target_date)
+        stored = await asyncio.to_thread(repository.upsert_daily_equity_bars, bars)
+        logger.info("Stored %s daily NSE equity bars for %s", stored, target_date.isoformat())
+        return stored
+    except Exception:
+        logger.exception("Daily NSE bhavcopy ingestion failed for %s", target_date.isoformat())
+        return 0
+
+
+async def ingest_participant_oi(report_date: str | None = None) -> int:
+    """Store the public EOD participant OI report, trying recent calendar days.
+
+    A missed holiday report is normal.  The date remains attached to the rows,
+    so the dashboard cannot label the prior close's positions as intraday.
+    """
+    target = datetime.fromisoformat(report_date).date() if report_date else now_ist().date()
+    dates = [target - timedelta(days=offset) for offset in range(0, 5)]
+    for candidate_date in dates:
+        try:
+            rows = await asyncio.to_thread(collect_participant_oi, candidate_date)
+            if rows:
+                stored = await asyncio.to_thread(repository.upsert_participant_oi, rows)
+                logger.info("Stored %s participant OI rows for %s", stored, candidate_date.isoformat())
+                return stored
+        except Exception:
+            logger.exception("Could not ingest participant OI report for %s", candidate_date.isoformat())
+    return 0
+
+
+async def scheduled_bhavcopy_ingestion() -> None:
+    """Try NSE's completed daily bhavcopy after the regular market session."""
+    await ingest_daily_bhavcopy()
 
 
 # ?? Background poller ?????????????????????????????????????????????????????????
@@ -226,6 +355,22 @@ async def lifespan(app: FastAPI):
         max_instances=1,
         coalesce=True,
     )
+    scheduler.add_job(
+        scheduled_bhavcopy_ingestion,
+        CronTrigger(day_of_week="mon-fri", hour=18, minute=10, timezone=IST),
+        id="nse-daily-bhavcopy-ingestion",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        ingest_participant_oi,
+        CronTrigger(day_of_week="mon-fri", hour=17, minute=15, timezone=IST),
+        id="nse-participant-oi-ingestion",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.start()
     app.state.scheduler = scheduler
     # A newly deployed year is unknown until NSE's public calendar loads.
@@ -282,6 +427,16 @@ async def health():
         "last_refresh_was_stale": _last_refresh_was_stale,
         "last_snapshot_id": _last_snapshot_id,
         "holiday_calendar": holiday_calendar_metadata(),
+        "daily_equity_data": repository.daily_equity_bar_summary(),
+    }
+
+
+@app.get("/api/sources")
+async def sources():
+    """Declared public-data coverage; unavailable sources are never implied live."""
+    return {
+        "sources": public_source_inventory(),
+        "policy": "Only public/free sources are used. A NOT_CONFIGURED source is not silently substituted or inferred.",
     }
 
 
@@ -290,6 +445,7 @@ async def oi_signals(
     refresh:      bool  = Query(False, description="Force fresh NSE fetch"),
     signal:       str   = Query("",    description="Filter by signal type"),
     tier:         str   = Query("",    description="Filter by tier: HIGH | MEDIUM"),
+    sector:       str   = Query("",    description="Curated display sector; unknown symbols are Unclassified"),
     min_strength: float = Query(0,     description="Min strength score"),
 ):
     """
@@ -318,6 +474,8 @@ async def oi_signals(
         results = [r for r in results if r["signal"] == signal.upper()]
     if tier:
         results = [r for r in results if r["confidence_tier"] == tier.upper()]
+    if sector:
+        results = [r for r in results if str(r.get("sector") or "Unclassified").casefold() == sector.strip().casefold()]
     if min_strength > 0:
         results = [r for r in results if r["strength"] >= min_strength]
 
@@ -340,6 +498,7 @@ async def oi_signals(
         "filtered_count":    len(results),
         "signal_counts":     counts,
         "signal_meta":       SIGNAL_META,
+        "available_sectors": known_sectors(),
         "signals":           results,
         "timestamp":         now_ist().strftime("%H:%M:%S"),
         "last_refresh_at_ist": _last_refresh_at_ist,
@@ -371,10 +530,191 @@ async def today_history(
 async def today_analytics():
     """Return server-calculated daily performance for durable signal events."""
     trade_date = ist_trade_date()
+    events = await asyncio.to_thread(repository.backtest_events, trade_date, trade_date)
     return {
         "trade_date": trade_date,
         "metrics": await asyncio.to_thread(repository.performance_for_date, trade_date),
+        "breakdowns": summarize_candidate_backtest(events),
         "timestamp": now_ist().strftime("%Y-%m-%d %H:%M:%S IST"),
+    }
+
+
+def _validated_backtest_dates(start_date: str, end_date: str) -> tuple[str, str]:
+    try:
+        start = datetime.fromisoformat(start_date).date()
+        end = datetime.fromisoformat(end_date).date()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Dates must use YYYY-MM-DD") from exc
+    if start > end:
+        raise HTTPException(status_code=400, detail="from_date must be on or before to_date")
+    if (end - start).days > 366:
+        raise HTTPException(status_code=400, detail="Backtest range is limited to 366 days")
+    return start.isoformat(), end.isoformat()
+
+
+@app.get("/api/backtest")
+async def backtest(
+    from_date: str = Query(..., description="IST start date, YYYY-MM-DD"),
+    to_date: str = Query(..., description="IST end date, YYYY-MM-DD"),
+):
+    """Analyze stored candidate events; does not claim strategy performance."""
+    start, end = _validated_backtest_dates(from_date, to_date)
+    events = await asyncio.to_thread(repository.backtest_events, start, end)
+    return {
+        "from_date": start,
+        "to_date": end,
+        "metrics": summarize_candidate_backtest(events),
+    }
+
+
+@app.get("/api/backtest/export.csv")
+async def backtest_export(
+    from_date: str = Query(..., description="IST start date, YYYY-MM-DD"),
+    to_date: str = Query(..., description="IST end date, YYYY-MM-DD"),
+):
+    """Export the underlying stored candidate-event rows for audit/recalculation."""
+    start, end = _validated_backtest_dates(from_date, to_date)
+    events = await asyncio.to_thread(repository.backtest_events, start, end)
+    fields = [
+        "captured_at_ist", "trade_date", "symbol", "signal", "direction", "confidence",
+        "entry", "stop_loss", "target_1", "target_2", "risk_reward", "risk_source",
+        "current_price", "exit_price", "max_target_hit", "status", "result", "sector",
+    ]
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(events)
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="nse-oi-candidates-{start}-to-{end}.csv"'},
+    )
+
+
+@app.get("/api/market-overview")
+async def market_overview(refresh: bool = Query(False)):
+    """Cached public NSE indices, VIX, breadth, and FII/DII cash activity."""
+    cache_key = "market-overview"
+    if refresh:
+        cache.delete(cache_key)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return {"cached": True, **cached}
+    indices, activity = await asyncio.gather(
+        asyncio.to_thread(fetch_market_indices),
+        asyncio.to_thread(fetch_fii_dii_activity),
+    )
+    result = normalize_market_overview(indices, activity)
+    cache.set(cache_key, result, ttl=settings.cache_ttl_seconds)
+    return {"cached": False, **result}
+
+
+@app.get("/api/market-regime")
+async def market_regime(refresh: bool = Query(False)):
+    """Public-VIX regime context, deliberately separate from a trade call."""
+    cache_key = "market-overview"
+    if refresh:
+        cache.delete(cache_key)
+    overview = cache.get(cache_key)
+    if overview is None:
+        indices, activity = await asyncio.gather(
+            asyncio.to_thread(fetch_market_indices),
+            asyncio.to_thread(fetch_fii_dii_activity),
+        )
+        overview = normalize_market_overview(indices, activity)
+        cache.set(cache_key, overview, ttl=settings.cache_ttl_seconds)
+    return {
+        "source": "public NSE index context",
+        **classify_market_regime(None, overview),
+    }
+
+
+@app.get("/api/market-intelligence")
+async def market_intelligence():
+    """Compact daily briefing from the app's existing public-source cache."""
+    overview = cache.get("market-overview")
+    if overview is None:
+        indices, activity = await asyncio.gather(
+            asyncio.to_thread(fetch_market_indices),
+            asyncio.to_thread(fetch_fii_dii_activity),
+        )
+        overview = normalize_market_overview(indices, activity)
+        cache.set("market-overview", overview, ttl=settings.cache_ttl_seconds)
+    announcements = await asyncio.to_thread(repository.recent_corporate_announcements, limit=200)
+    return {
+        "timestamp": now_ist().strftime("%Y-%m-%d %H:%M:%S IST"),
+        **build_market_intelligence(
+            overview,
+            classify_market_regime(None, overview),
+            announcements,
+            cache.get("all_signals") or [],
+        ),
+    }
+
+
+@app.get("/api/cas/{symbol}")
+async def candidate_confidence_analysis(symbol: str):
+    """Return stored CAS context for a currently cached OI/price candidate."""
+    symbol = symbol.upper().strip()
+    candidate = next(
+        (row for row in (cache.get("all_signals") or []) if row.get("symbol") == symbol),
+        None,
+    )
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="No current candidate for symbol; refresh the scanner first")
+    return {
+        "symbol": symbol,
+        "classification": candidate.get("classification"),
+        "trade_recommendation": candidate.get("trade_recommendation", "NO_TRADE"),
+        "cas": candidate.get("cas_context") or confidence_analysis(
+            candidate.get("technical_context"), candidate.get("news_context"), cache.get("market-overview"),
+        ),
+    }
+
+
+@app.get("/api/news")
+async def corporate_news(symbol: str = Query(""), limit: int = Query(100, ge=1, le=500), refresh: bool = Query(False)):
+    """Latest public NSE corporate disclosures, labeled for event risk not sentiment."""
+    if refresh:
+        announcements = normalize_nse_announcements(await asyncio.to_thread(fetch_corporate_announcements))
+        await asyncio.to_thread(repository.upsert_corporate_announcements, announcements)
+    rows = await asyncio.to_thread(repository.recent_corporate_announcements, symbol=symbol or None, limit=limit)
+    return {
+        "source": "NSE corporate announcements",
+        "symbol": symbol.upper().strip() or None,
+        "announcements": rows,
+        "methodology_caveat": "Labels indicate potential event volatility only; they do not infer news sentiment or a trade direction.",
+    }
+
+
+@app.get("/api/participant-oi")
+async def participant_oi(refresh: bool = Query(False)):
+    """Latest stored public NSE EOD participant-wise OI report."""
+    if refresh:
+        await ingest_participant_oi()
+    result = await asyncio.to_thread(repository.latest_participant_oi)
+    return {
+        "source": "NSE F&O participant-wise OI end-of-day report",
+        "data_frequency": "end_of_day",
+        "is_intraday": False,
+        "methodology_caveat": "Participant OI is published as an end-of-day report and is context only, not a live participant-position or trade signal.",
+        **result,
+    }
+
+
+@app.get("/api/technical/{symbol}")
+async def technical_analysis(symbol: str):
+    """Daily NSE-bar technical context, not an intraday trade instruction."""
+    symbol = symbol.upper().strip()
+    if not symbol or len(symbol) > 32 or not symbol.replace("&", "").replace("-", "").isalnum():
+        raise HTTPException(status_code=400, detail="Invalid NSE symbol")
+    bars = await asyncio.to_thread(repository.daily_equity_bars_for_symbol, symbol)
+    context = technical_context(bars)
+    return {
+        "symbol": symbol,
+        "source": "NSE daily equity bhavcopy",
+        "timestamp": now_ist().strftime("%Y-%m-%d %H:%M:%S IST"),
+        **context,
     }
 
 
@@ -446,8 +786,49 @@ async def option_chain(symbol: str, refresh: bool = Query(False)):
             }
         )
 
+    history: list[dict] = []
+    try:
+        await asyncio.to_thread(repository.record_option_chain_snapshot, result, now_ist())
+        history = await asyncio.to_thread(repository.option_chain_history, symbol)
+    except Exception:
+        logger.exception("Could not persist option-chain history for %s", symbol)
+    result["pcr_history"] = history
+    result["pcr_trend"] = summarize_pcr_trend(history)
     cache.set(cache_key, result, ttl=settings.cache_ttl_seconds)
     return {"source": "live", **result}
+
+
+@app.get("/api/option-chain/{symbol}/history")
+async def option_chain_history(symbol: str, limit: int = Query(200, ge=1, le=1000)):
+    """Stored PCR/max-pain timeline from prior public NSE chain observations."""
+    symbol = symbol.upper().strip()
+    history = await asyncio.to_thread(repository.option_chain_history, symbol, limit=limit)
+    return {
+        "symbol": symbol,
+        "source": "server-owned option-chain snapshots",
+        "history": history,
+        "trend": summarize_pcr_trend(history),
+    }
+
+
+@app.get("/api/option-chain/{symbol}/heatmap")
+async def option_chain_heatmap(symbol: str, refresh: bool = Query(False)):
+    """OI/?OI intensity ladder based on the current public chain window."""
+    symbol = symbol.upper().strip()
+    cache_key = f"chain:{symbol}"
+    if refresh:
+        cache.delete(cache_key)
+    chain = cache.get(cache_key)
+    if chain is None:
+        chain = await asyncio.to_thread(get_option_chain_analysis, symbol)
+        if "error" not in chain:
+            cache.set(cache_key, chain, ttl=settings.cache_ttl_seconds)
+    if "error" in chain:
+        return JSONResponse(status_code=200, content={
+            "symbol": symbol, "error": chain["error"], "strikes": [],
+            "methodology_caveat": "No heatmap is available until a public NSE option chain is returned.",
+        })
+    return {"symbol": symbol, "expiry": chain.get("expiry"), **option_oi_heatmap(chain.get("strikes") or [])}
 
 
 @app.get("/api/signal/{symbol}")

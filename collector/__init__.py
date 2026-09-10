@@ -1,0 +1,1 @@
+"""Public NSE collector adapters."""
