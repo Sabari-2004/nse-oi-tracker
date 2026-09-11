@@ -49,9 +49,10 @@ from app.nse_fetcher import (
     test_nse_connectivity,
 )
 from analytics.technical import technical_context
+from analytics.intraday import observe as observe_intraday
 from collector.bhavcopy import collect_equity_bhavcopy
 from collector.participant_oi import collect_participant_oi
-from signal_engine.quality import apply_daily_technical_context
+from signal_engine.quality import apply_daily_technical_context, apply_intraday_observation_context
 from analytics.market_overview import normalize_market_overview
 from analytics.option_chain import summarize_pcr_trend
 from analytics.backtest import summarize_candidate_backtest
@@ -113,6 +114,23 @@ def _refresh_signals() -> list[dict]:
     global _last_refresh_at_ist, _last_refresh_was_stale, _last_snapshot_id
     signals = scan_all_fno_realtime()
     signals = [attach_sector(signal) for signal in signals]
+    # The public NSE live endpoint is polled every minute. Where it supplies
+    # cumulative volume, retain a session VWAP from those real observations.
+    # This is deliberately labelled observation-based; it is not fabricated
+    # 5-minute OHLCV and never turns a candidate into an order recommendation.
+    session_date = now_ist().date()
+    signals = [
+        {
+            **signal,
+            "intraday_context": observe_intraday(
+                str(signal.get("symbol") or ""),
+                float(signal.get("ltp") or 0),
+                float(signal.get("volume") or 0),
+                session_date,
+            ),
+        }
+        for signal in signals
+    ]
     if signals:
         try:
             bars_by_symbol = repository.daily_equity_bars_for_symbols(
@@ -123,6 +141,10 @@ def _refresh_signals() -> list[dict]:
                     signal,
                     technical_context(bars_by_symbol.get(str(signal.get("symbol") or ""), [])),
                 )
+                for signal in signals
+            ]
+            signals = [
+                apply_intraday_observation_context(signal, signal.get("intraday_context"))
                 for signal in signals
             ]
             signals = [{
