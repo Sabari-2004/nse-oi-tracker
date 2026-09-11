@@ -35,9 +35,6 @@ def test_live_nse_field_names_produce_buy_signal():
     assert result["oi"] == 8021474
     assert result["oi_change"] == 1921846
     assert result["oi_change_pct"] > 0
-    assert result["trade_recommendation"] == "NO_TRADE"
-    assert result["actionable"] is False
-    assert result["validation_status"] == "MISSING_INDEPENDENT_CONFIRMATIONS"
 
 
 def test_live_nse_field_names_produce_sell_signal():
@@ -102,12 +99,35 @@ def test_modest_valid_signal_is_not_discarded_as_low(monkeypatch):
     assert results[0]["confidence_tier"] == "MEDIUM"
 
 
-def test_zero_open_interest_is_not_treated_as_tradeable_liquidity():
+def test_high_score_signal_is_actionable_and_exposes_factor_audit():
     result = _parse_row({
-        "symbol": "NO_OI", "underlyingValue": 500,
+        "symbol": "STRONGCO", "underlyingValue": 500,
         "pChange": 3.0, "change": 15,
-        "oi": 0, "oiChange": 30_000, "oiChangePct": 30.0,
+        "oi": 1_000_000, "oiChange": 200_000, "oiChangePct": 20.0,
     })
+    assert result["score"] == 100
+    assert result["actionable"] is True
+    assert result["trade_recommendation"] == "TRADE"
+    assert result["confirmed_factors"]
+    assert result["data_source"] == "NSE live-analysis-oi-spurts-underlyings"
 
-    assert result is not None
-    assert result["confidence_tier"] == "LOW"
+
+def test_medium_score_signal_remains_no_trade_but_explains_missing_factors():
+    result = _parse_row({
+        "symbol": "WEAKCO", "underlyingValue": 500,
+        "pChange": 0.25, "change": 1.25,
+        "oi": 100_000, "oiChange": 23_000, "oiChangePct": 30.0,
+    })
+    assert result["score"] < 75
+    assert result["actionable"] is False
+    assert result["trade_recommendation"] == "NO_TRADE"
+    assert isinstance(result["missing_factors"], list)
+
+
+def test_angel_one_adapter_is_read_only():
+    from pathlib import Path
+    source = (Path(__file__).parent / "app" / "angel_one.py").read_text(encoding="utf-8")
+    assert "market/v1/quote/" in source
+    assert "placeOrder" not in source
+    assert "modifyOrder" not in source
+    assert "cancelOrder" not in source

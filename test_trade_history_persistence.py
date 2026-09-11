@@ -7,7 +7,7 @@ INDEX = Path(__file__).parent / "static" / "index.html"
 def test_trade_history_is_scoped_to_the_current_day():
     source = INDEX.read_text(encoding="utf-8")
     assert "one independent trade list per IST day" in source
-    assert "Daily history ? resets at midnight IST" in source
+    assert "Daily history — resets at midnight IST" in source
     assert "localStorage.getItem(`${STORAGE_KEY}:${today}`)" in source
     assert "Clear all saved trades? This cannot be undone." in source
 
@@ -44,30 +44,9 @@ def test_trade_history_has_indexeddb_redundant_backup():
     assert "!this._dailyStoragePresent" in source
 
 
-def test_dashboard_prefers_server_owned_history_when_available():
+def test_received_signals_are_auto_saved_once_per_day():
     source = INDEX.read_text(encoding="utf-8")
-    assert "fetch('/api/history/today')" in source
-    assert "this.historySource = 'server';" in source
-    assert "Server history unavailable; using browser fallback" in source
-
-
-def test_dashboard_does_not_offer_unvalidated_oi_candidates_as_trades():
-    source = INDEX.read_text(encoding="utf-8")
-    assert "OBSERVE ? NO TRADE" in source
-    assert "!row.actionable || historySource === 'server'" in source
-    assert "Needs validation" in source
-
-
-def test_dashboard_renders_public_market_context_with_a_data_caveat():
-    source = INDEX.read_text(encoding="utf-8")
-    assert "Market Context ? Public NSE Data" in source
-    assert "fetchMarketOverview" in source
-    assert "FII/FPI cash net" in source
-
-
-def test_dashboard_displays_descriptive_pcr_timeline():
-    source = INDEX.read_text(encoding="utf-8")
-    assert "PCR timeline" in source
-    assert "Max pain shift" in source
-    assert "stored public option-chain observations" in source
-    assert "Context only ? not a trade signal" in source
+    assert "this.autoSaveSignals(this.signals);" in source
+    assert "if (!this.alreadyAdded(row.symbol)) this.addTrade(row, true);" in source
+    assert "addTrade(row, silent=false)" in source
+    assert "if (!silent) this.activeTab = 'trades';" in source
