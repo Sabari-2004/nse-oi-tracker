@@ -65,4 +65,17 @@ def session_vwap(symbol: str) -> float | None:
         _, _, observations = record
         total_volume = sum(volume for _, volume in observations)
         return sum(price * volume for price, volume in observations) / total_volume if total_volume else None
-__all__ = ["observe", "session_vwap", "clear"]
+
+
+def candle_vwap(candles: list[dict]) -> float | None:
+    """Calculate a genuine OHLCV VWAP from broker-provided candles."""
+    valid = [c for c in candles if float(c.get("volume") or 0) > 0]
+    volume = sum(float(c["volume"]) for c in valid)
+    if not volume:
+        return None
+    return round(sum(
+        ((float(c["high"]) + float(c["low"]) + float(c["close"])) / 3)
+        * float(c["volume"])
+        for c in valid
+    ) / volume, 4)
+__all__ = ["observe", "session_vwap", "candle_vwap", "clear"]
