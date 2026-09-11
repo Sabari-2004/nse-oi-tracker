@@ -1,14 +1,14 @@
-# oi_analyzer.py ? Signal engine using live-analysis-oi-spurts-underlyings
+# oi_analyzer.py — Signal engine using live-analysis-oi-spurts-underlyings
 #
 # Data source: single NSE endpoint that returns ALL F&O stocks with:
 #   - OI change %  (direction tells us: OI up = buildup, OI down = unwinding/covering)
 #   - Price change % (direction tells us: price up = bulls, price down = bears)
 #
 # Classification matrix:
-#   Price ? + OI ? ? LONG_BUILDUP   (BUY  ? strong)
-#   Price ? + OI ? ? SHORT_BUILDUP  (SELL ? strong)
-#   Price ? + OI ? ? SHORT_COVERING (BUY  ? weak, quick)
-#   Price ? + OI ? ? LONG_UNWINDING (SELL ? weak, quick)
+#   Price ↑ + OI ↑ → LONG_BUILDUP   (BUY  — strong)
+#   Price ↓ + OI ↑ → SHORT_BUILDUP  (SELL — strong)
+#   Price ↑ + OI ↓ → SHORT_COVERING (BUY  — weak, quick)
+#   Price ↓ + OI ↓ → LONG_UNWINDING (SELL — weak, quick)
 
 from __future__ import annotations
 import logging
@@ -25,12 +25,10 @@ from app.nse_fetcher import (
     fetch_option_chain_equity,
     fetch_quote_derivative,
 )
-from analytics.option_chain import calculate_max_pain, classify_pcr, summarize_oi_levels
-from signal_engine.quality import oi_price_candidate
 
 logger = logging.getLogger(__name__)
 
-# ?? Signal constants ??????????????????????????????????????????????????????????
+# ── Signal constants ──────────────────────────────────────────────────────────
 SIGNAL_LONG_BUILDUP   = "LONG_BUILDUP"
 SIGNAL_SHORT_BUILDUP  = "SHORT_BUILDUP"
 SIGNAL_SHORT_COVERING = "SHORT_COVERING"
@@ -39,12 +37,12 @@ SIGNAL_CAS_SHORT_COVERING = "CAS_SHORT_COVERING"
 SIGNAL_NEUTRAL        = "NEUTRAL"
 
 SIGNAL_META = {
-    SIGNAL_LONG_BUILDUP:   {"label":"Long Buildup",   "emoji":"??","color":"green",  "bias":"Bullish",      "direction":"BUY"},
-    SIGNAL_SHORT_BUILDUP:  {"label":"Short Buildup",  "emoji":"??","color":"red",    "bias":"Bearish",      "direction":"SELL"},
-    SIGNAL_SHORT_COVERING: {"label":"Short Covering", "emoji":"??","color":"yellow", "bias":"Bullish Fade", "direction":"BUY"},
-        SIGNAL_LONG_UNWINDING: {"label":"Long Unwinding", "emoji":"??","color":"orange", "bias":"Bearish Fade",     "direction":"SELL"},
-    SIGNAL_CAS_SHORT_COVERING: {"label":"CAS Short Covering", "emoji":"?","color":"lime", "bias":"Strong Bullish Next Day", "direction":"BUY"},
-    SIGNAL_NEUTRAL:        {"label":"Neutral",        "emoji":"?","color":"gray",   "bias":"Sideways",     "direction":"NONE"},
+    SIGNAL_LONG_BUILDUP:   {"label":"Long Buildup",   "emoji":"🟢","color":"green",  "bias":"Bullish",      "direction":"BUY"},
+    SIGNAL_SHORT_BUILDUP:  {"label":"Short Buildup",  "emoji":"🔴","color":"red",    "bias":"Bearish",      "direction":"SELL"},
+    SIGNAL_SHORT_COVERING: {"label":"Short Covering", "emoji":"🟡","color":"yellow", "bias":"Bullish Fade", "direction":"BUY"},
+        SIGNAL_LONG_UNWINDING: {"label":"Long Unwinding", "emoji":"🟠","color":"orange", "bias":"Bearish Fade",     "direction":"SELL"},
+    SIGNAL_CAS_SHORT_COVERING: {"label":"CAS Short Covering", "emoji":"⚡","color":"lime", "bias":"Strong Bullish Next Day", "direction":"BUY"},
+    SIGNAL_NEUTRAL:        {"label":"Neutral",        "emoji":"⚪","color":"gray",   "bias":"Sideways",     "direction":"NONE"},
 }
 
 # Used by main.py /api/category route
@@ -56,7 +54,7 @@ CATEGORY_TO_SIGNAL = {
 }
 
 
-# ?? Signal classifier ?????????????????????????????????????????????????????????
+# ── Signal classifier ─────────────────────────────────────────────────────────
 
 _IST = ZoneInfo("Asia/Kolkata")
 _field_usage: dict[str, dict[str, str | None]] = {}
@@ -75,7 +73,7 @@ def sample_field_usage(limit: int = 5) -> dict[str, dict[str, str | None]]:
 
 
 def detect_cas_jump(symbol: str, price_change_pct: float, time_ist, oi_change_pct: float) -> bool:
-    """Return true for a strong 15:30?15:40 IST price jump with OI covering."""
+    """Return true for a strong 15:30–15:40 IST price jump with OI covering."""
     try:
         if isinstance(time_ist, datetime):
             current = time_ist.astimezone(_IST).time()
@@ -90,10 +88,10 @@ def detect_cas_jump(symbol: str, price_change_pct: float, time_ist, oi_change_pc
 
 
 def classify_signal(price_change_pct: float, oi_change_pct: float) -> str:
-    price_up = price_change_pct >=  PRICE_CHANGE_THRESHOLD
-    price_dn = price_change_pct <= -PRICE_CHANGE_THRESHOLD
-    oi_up    = oi_change_pct    >=  OI_CHANGE_THRESHOLD
-    oi_dn    = oi_change_pct    <= -OI_CHANGE_THRESHOLD
+    price_up = price_change_pct >  PRICE_CHANGE_THRESHOLD
+    price_dn = price_change_pct < -PRICE_CHANGE_THRESHOLD
+    oi_up    = oi_change_pct    >  OI_CHANGE_THRESHOLD
+    oi_dn    = oi_change_pct    < -OI_CHANGE_THRESHOLD
     if price_up and oi_up:  return SIGNAL_LONG_BUILDUP
     if price_dn and oi_up:  return SIGNAL_SHORT_BUILDUP
     if price_up and oi_dn:  return SIGNAL_SHORT_COVERING
@@ -101,20 +99,20 @@ def classify_signal(price_change_pct: float, oi_change_pct: float) -> str:
     return SIGNAL_NEUTRAL
 
 
-# ?? High-confidence scoring ???????????????????????????????????????????????????
+# ── High-confidence scoring ───────────────────────────────────────────────────
 
 def confidence_score(price_chg_p: float, oi_chg_p: float, oi_abs: float) -> int:
     """
-    Composite confidence 0?100.
+    Composite confidence 0–100.
     Components:
-      Price strength  (0?35 pts): how far price moved from flat
-      OI conviction   (0?45 pts): how strongly OI changed
-      Liquidity       (0?20 pts): absolute OI size (illiquid stocks filtered)
+      Price strength  (0–35 pts): how far price moved from flat
+      OI conviction   (0–45 pts): how strongly OI changed
+      Liquidity       (0–20 pts): absolute OI size (illiquid stocks filtered)
 
     Tier thresholds are defined in config.py (CONFIDENCE_HIGH / CONFIDENCE_MEDIUM)
-    ? do not hardcode numbers in this docstring, they will drift out of sync
+    — do not hardcode numbers in this docstring, they will drift out of sync
     with the actual thresholds again, which is exactly the bug this comment
-    used to have (it said "HIGH ? 65" while config.py said 75).
+    used to have (it said "HIGH ≥ 65" while config.py said 75).
     """
     score = 0
     p = abs(price_chg_p)
@@ -147,14 +145,34 @@ def confidence_tier(score: int) -> str:
     return "LOW"
 
 
+def score_factors(price_chg_p: float, oi_chg_p: float, oi_abs: float) -> tuple[list[str], list[str]]:
+    """Return transparent evidence behind the 0–100 confidence score."""
+    confirmed: list[str] = []
+    missing: list[str] = []
+    p, o = abs(price_chg_p), abs(oi_chg_p)
+    if p >= 0.4:
+        confirmed.append(f"price move {price_chg_p:+.2f}%")
+    else:
+        missing.append("price confirmation below 0.40%")
+    if o >= 3:
+        confirmed.append(f"OI change {oi_chg_p:+.2f}%")
+    else:
+        missing.append("OI change below 3.00%")
+    if oi_abs >= MIN_OI_ABSOLUTE:
+        confirmed.append(f"liquidity {int(oi_abs):,} OI")
+    else:
+        missing.append(f"OI liquidity below {MIN_OI_ABSOLUTE:,}")
+    return confirmed, missing
+
+
 def signal_strength(price_chg_p: float, oi_chg_p: float) -> float:
     return round(min(abs(price_chg_p)/2.0, 50) + min(abs(oi_chg_p)/5.0, 50), 1)
 
 
-# ?? Safe field helpers ????????????????????????????????????????????????????????
+# ── Safe field helpers ────────────────────────────────────────────────────────
 
 def _f(val) -> float:
-    """Safe float ? returns 0.0 on None/empty/error."""
+    """Safe float — returns 0.0 on None/empty/error."""
     if val is None or val == "" or val == "-":
         return 0.0
     try:
@@ -164,7 +182,7 @@ def _f(val) -> float:
 
 
 def _symbol(row: dict) -> str:
-    """Extract symbol from NSE row ? handles all known field name variants."""
+    """Extract symbol from NSE row — handles all known field name variants."""
     for key in ("underlying", "symbol", "UNDERLYING", "SYMBOL"):
         v = row.get(key)
         if v and isinstance(v, str):
@@ -181,28 +199,24 @@ def _first_numeric(row: dict, fields: tuple[str, ...]) -> tuple[float, str | Non
 
 
 def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
-                      signal, is_cas_jump=False, low_liquidity=False,
-                      volume=0.0) -> dict:
+                      signal, is_cas_jump=False, low_liquidity=False) -> dict:
     meta = SIGNAL_META[signal]
     conf = confidence_score(price_chg_p, oi_chg_p, oi)
     if is_cas_jump and signal == SIGNAL_CAS_SHORT_COVERING:
         conf = min(conf + 15, 100)
     tier = "LOW" if low_liquidity else confidence_tier(conf)
     strg = signal_strength(price_chg_p, oi_chg_p)
-    candidate = oi_price_candidate(
-        signal=signal,
-        bias=meta["bias"],
-        direction=meta["direction"],
-    )
+    confirmed, missing = score_factors(price_chg_p, oi_chg_p, oi)
+    actionable = bool(conf >= CONFIDENCE_HIGH and signal != SIGNAL_NEUTRAL and not low_liquidity)
     return {
         "symbol":           sym,
+        "data_source":      "NSE live-analysis-oi-spurts-underlyings",
         "ltp":              round(ltp, 2),
         "price_change":     round(price_chg, 2),
         "price_change_pct": round(price_chg_p, 2),
         "oi":               int(oi),
         "oi_change":        int(oi_chg),
         "oi_change_pct":    round(oi_chg_p, 2),
-        "volume":           int(volume or 0),
         "signal":           signal,
         "signal_label":     meta["label"],
         "signal_emoji":     meta["emoji"],
@@ -211,9 +225,13 @@ def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
         "signal_direction": meta["direction"],
         "strength":         strg,
         "confidence":       conf,
-        "confidence_tier": tier,
+        "score":            conf,
+        "confidence_tier":  tier,
+        "confirmed_factors": confirmed,
+        "missing_factors":   missing,
+        "trade_recommendation": "TRADE" if actionable else "NO_TRADE",
+        "actionable":       actionable,
         "is_cas_jump": bool(is_cas_jump),
-        **candidate,
     }
 
 
@@ -232,12 +250,17 @@ def _parse_row(row: dict) -> dict | None:
         row.get("underlyingValue") or 0
     )
 
-    price_chg_p, _ = _first_numeric(row, (
-        "pChange", "perChange", "changePer", "change_p", "perchange",
-        "pchange", "percentChange",
-    ))
+    price_chg_p = _f(
+        row.get("pChange") or row.get("perChange") or
+        row.get("changePer") or row.get("change_p") or
+        row.get("perchange") or row.get("pchange") or
+        row.get("percentChange") or 0
+    )
 
-    price_chg, _ = _first_numeric(row, ("change", "priceChange", "netChange"))
+    price_chg = _f(
+        row.get("change") or row.get("priceChange") or
+        row.get("netChange") or 0
+    )
 
     oi, oi_field = _first_numeric(row, (
         "oi", "openInterest", "OI", "openinterest", "latestOI", "totalOI",
@@ -249,9 +272,6 @@ def _parse_row(row: dict) -> dict | None:
         "oiChangePct", "perOIchange", "oiChangePer", "changeOI_pct",
         "perOIChange", "oiChangePercent", "pOIchng", "oichngper",
         "oiChangePercentage", "changeInOIPercent", "pOIChange",
-    ))
-    volume, _ = _first_numeric(row, (
-        "volume", "totalTradedVolume", "totalTradedVol", "tradedVolume", "vol",
     ))
     _field_usage[sym] = {
         "oi_field": oi_field,
@@ -266,10 +286,7 @@ def _parse_row(row: dict) -> dict | None:
     if ltp == 0:
         return None
 
-    # A missing/zero OI is not liquidity. Treat it the same as sub-threshold
-    # OI so a large percentage move cannot become a HIGH signal without a
-    # tradeable open-interest base.
-    low_liquidity = oi < MIN_OI_ABSOLUTE
+    low_liquidity = oi > 0 and oi < MIN_OI_ABSOLUTE
     signal = classify_signal(price_chg_p, oi_chg_p)
     global _last_cas_time_ist
     scan_time = datetime.now(_IST)
@@ -281,14 +298,13 @@ def _parse_row(row: dict) -> dict | None:
         return None
 
     result = _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
-                               signal, is_cas_jump=cas_jump, low_liquidity=low_liquidity,
-                               volume=volume)
+                               signal, is_cas_jump=cas_jump, low_liquidity=low_liquidity)
 
     # Keep LOW rows classified for diagnostics; scan_all_fno_realtime filters them.
     return result
 
 
-# ?? PRIMARY SCANNER ???????????????????????????????????????????????????????????
+# ── PRIMARY SCANNER ───────────────────────────────────────────────────────────
 
 def scan_all_fno_realtime() -> list[dict]:
     """
@@ -300,10 +316,10 @@ def scan_all_fno_realtime() -> list[dict]:
 
     Returns HIGH + MEDIUM confidence signals, sorted by confidence (HIGH first).
     LOW-confidence rows are computed (for /api/debug diagnostics) but dropped
-    here ? they're the noise floor, not a signal.
+    here — they're the noise floor, not a signal.
 
     NOTE: this used to silently drop everything below HIGH despite this exact
-    docstring claiming HIGH+MEDIUM were both returned ? CONFIDENCE_MEDIUM was
+    docstring claiming HIGH+MEDIUM were both returned — CONFIDENCE_MEDIUM was
     dead code. That mismatch is fixed; if you change the filter here, update
     this docstring in the same commit, not "later".
     """
@@ -325,7 +341,7 @@ def scan_all_fno_realtime() -> list[dict]:
         seen.add(result["symbol"])
         results.append(result)
 
-    # Sort: HIGH first ? higher confidence ? higher strength
+    # Sort: HIGH first → higher confidence → higher strength
     results.sort(key=lambda r: (
         0 if r["confidence_tier"] == "HIGH" else 1,
         -r["confidence"],
@@ -335,13 +351,13 @@ def scan_all_fno_realtime() -> list[dict]:
     high   = sum(1 for r in results if r["confidence_tier"] == "HIGH")
     medium = sum(1 for r in results if r["confidence_tier"] == "MEDIUM")
     logger.info(
-        f"Scan complete: {len(rows)} F&O stocks checked ? "
-        f"{len(results)} signals ({high} HIGH ???, {medium} MEDIUM ??)"
+        f"Scan complete: {len(rows)} F&O stocks checked → "
+        f"{len(results)} signals ({high} HIGH ⭐⭐⭐, {medium} MEDIUM ⭐⭐)"
     )
     return results
 
 
-# ?? Dummy parse for /api/category route (back-compat) ????????????????????????
+# ── Dummy parse for /api/category route (back-compat) ────────────────────────
 
 def _parse_buildup_row(row: dict, signal: str) -> dict | None:
     """Parse a raw row and force a specific signal type (used by /api/category)."""
@@ -359,7 +375,7 @@ def _parse_buildup_row(row: dict, signal: str) -> dict | None:
     return _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p, signal)
 
 
-# ?? OPTION CHAIN ??????????????????????????????????????????????????????????????
+# ── OPTION CHAIN ──────────────────────────────────────────────────────────────
 
 def get_option_chain_analysis(symbol: str) -> dict:
     is_index = symbol in INDICES
@@ -407,10 +423,26 @@ def _parse_option_chain(data: dict, symbol: str) -> dict:
             })
 
         pcr = round(total_pe / total_ce, 2) if total_ce > 0 else 0
-        pcr_label = classify_pcr(pcr)
-        max_pain = calculate_max_pain(pain_map)
+        if pcr < 0.7:
+            pcr_label = "Bearish"
+        elif pcr > 1.3:
+            pcr_label = "Bullish"
+        else:
+            pcr_label = "Neutral"
+        # Max pain is the candidate strike with minimum aggregate intrinsic loss.
+        max_pain = 0
+        if pain_map:
+            losses = {
+                candidate: sum(
+                    data["ce_oi"] * max(0, candidate - strike)
+                    + data["pe_oi"] * max(0, strike - candidate)
+                    for strike, data in pain_map.items()
+                )
+                for candidate in pain_map
+            }
+            max_pain = min(losses, key=losses.get)
 
-        # Filter ATM ? STRIKES_EACH_SIDE
+        # Filter ATM ± STRIKES_EACH_SIDE
         atm_list = sorted({s["strike"] for s in strikes})
         atm_idx  = (min(range(len(atm_list)), key=lambda i: abs(atm_list[i] - atm_strike))
                     if atm_list else 0)
@@ -428,8 +460,6 @@ def _parse_option_chain(data: dict, symbol: str) -> dict:
             "total_ce_oi": int(total_ce),
             "total_pe_oi": int(total_pe),
             "max_pain": max_pain,
-            "oi_levels": summarize_oi_levels(strikes),
-            "oi_levels_note": "OI-derived zones are context, not standalone trade signals.",
             "strikes": strikes_f,
         }
     except Exception as exc:
