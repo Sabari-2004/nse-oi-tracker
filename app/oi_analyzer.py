@@ -25,6 +25,7 @@ from app.nse_fetcher import (
     fetch_option_chain_equity,
     fetch_quote_derivative,
 )
+from app.angel_one import angel_one
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +200,7 @@ def _first_numeric(row: dict, fields: tuple[str, ...]) -> tuple[float, str | Non
 
 
 def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
-                      signal, is_cas_jump=False, low_liquidity=False) -> dict:
+                      signal, is_cas_jump=False, low_liquidity=False, source=None) -> dict:
     meta = SIGNAL_META[signal]
     conf = confidence_score(price_chg_p, oi_chg_p, oi)
     if is_cas_jump and signal == SIGNAL_CAS_SHORT_COVERING:
@@ -210,7 +211,7 @@ def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
     actionable = bool(conf >= CONFIDENCE_HIGH and signal != SIGNAL_NEUTRAL and not low_liquidity)
     return {
         "symbol":           sym,
-        "data_source":      "NSE live-analysis-oi-spurts-underlyings",
+        "data_source":      source or "NSE live-analysis-oi-spurts-underlyings",
         "ltp":              round(ltp, 2),
         "price_change":     round(price_chg, 2),
         "price_change_pct": round(price_chg_p, 2),
@@ -298,7 +299,8 @@ def _parse_row(row: dict) -> dict | None:
         return None
 
     result = _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
-                               signal, is_cas_jump=cas_jump, low_liquidity=low_liquidity)
+                               signal, is_cas_jump=cas_jump, low_liquidity=low_liquidity,
+                               source=row.get("_data_source"))
 
     # Keep LOW rows classified for diagnostics; scan_all_fno_realtime filters them.
     return result
@@ -324,6 +326,19 @@ def scan_all_fno_realtime() -> list[dict]:
     this docstring in the same commit, not "later".
     """
     rows = fetch_all_fno_oi_change()
+    if rows and angel_one.configured:
+        symbols = [_symbol(row) for row in rows if _symbol(row)]
+        angel_quotes = {}
+        for start in range(0, len(symbols), 50):
+            angel_quotes.update(angel_one.quotes(symbols[start:start + 50]))
+        for row in rows:
+            quote = angel_quotes.get(_symbol(row))
+            if quote:
+                row["ltp"] = quote["ltp"]
+                row["latestOI"] = quote["oi"]
+                row["changeInOI"] = quote["oi_change"]
+                row["oiChangePct"] = quote["oi_change_pct"]
+                row["_data_source"] = "Angel One FULL quote"
 
     if not rows:
         logger.info("No data returned (market closed or NSE temporarily unavailable)")
