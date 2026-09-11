@@ -474,8 +474,12 @@ class SignalRepository:
     def _event_payload(signal: dict[str, Any], captured_at: datetime) -> tuple[dict[str, Any], dict[str, Any]]:
         payload = dict(signal)
         direction = str(payload.get("signal_direction") or "NONE").upper()
+        technical = payload.get("technical_context") or {}
         plan = build_risk_plan(
-            float(payload.get("ltp") or 0), direction, str(payload.get("signal") or "")
+            float(payload.get("ltp") or 0),
+            direction,
+            str(payload.get("signal") or ""),
+            atr14=technical.get("atr14"),
         )
         if plan is None:
             raise ValueError(f"Cannot persist a tradable signal without valid price/direction: {payload!r}")

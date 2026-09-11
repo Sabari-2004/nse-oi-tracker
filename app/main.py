@@ -49,9 +49,12 @@ from app.nse_fetcher import (
     test_nse_connectivity,
 )
 from analytics.technical import technical_context
+from analytics.intraday import observe as observe_intraday
+from analytics.intraday import candle_vwap
+from analytics.technical import ema as calculate_ema
 from collector.bhavcopy import collect_equity_bhavcopy
 from collector.participant_oi import collect_participant_oi
-from signal_engine.quality import apply_daily_technical_context
+from signal_engine.quality import apply_daily_technical_context, apply_intraday_observation_context
 from analytics.market_overview import normalize_market_overview
 from analytics.option_chain import summarize_pcr_trend
 from analytics.backtest import summarize_candidate_backtest
@@ -64,6 +67,7 @@ from analytics.oi_heatmap import option_oi_heatmap
 from analytics.traps import trap_risk
 from analytics.intelligence import build_market_intelligence
 from analytics.sources import public_source_inventory
+from integrations.angel_one_market_data import AngelOneMarketData
 from config.settings import get_settings
 from database.repository import SignalRepository
 from utils.time import IST, now_ist, ist_trade_date
@@ -71,6 +75,7 @@ from utils.time import IST, now_ist, ist_trade_date
 APP_VERSION = "4.4.0"
 settings = get_settings()
 repository = SignalRepository(settings.database_path)
+angel_market_data = AngelOneMarketData.from_environment()
 
 # Set this in Render's environment variables to lock down /api/debug in
 # production. Left unset, /api/debug stays open (dev convenience) but says
@@ -112,7 +117,47 @@ def _refresh_signals() -> list[dict]:
     global _last_good_signals, _last_good_signals_at
     global _last_refresh_at_ist, _last_refresh_was_stale, _last_snapshot_id
     signals = scan_all_fno_realtime()
+    if signals and angel_market_data is not None:
+        try:
+            quotes = angel_market_data.full_quotes(
+                [str(signal.get("symbol") or "") for signal in signals]
+            )
+            enriched = []
+            for signal in signals:
+                symbol = str(signal.get("symbol") or "").upper()
+                quote = quotes.get(symbol)
+                if quote and quote.get("ltp", 0) > 0:
+                    enriched.append({
+                        **signal,
+                        "nse_ltp": signal.get("ltp"),
+                        "ltp": round(float(quote["ltp"]), 2),
+                        "volume": quote.get("volume", signal.get("volume", 0)),
+                        "angel_quote": quote,
+                        "realtime_source": "angel_one_read_only",
+                    })
+                else:
+                    enriched.append(signal)
+            signals = enriched
+        except Exception:
+            logger.exception("Read-only Angel One quote overlay failed; retaining NSE data")
     signals = [attach_sector(signal) for signal in signals]
+    # The public NSE live endpoint is polled every minute. Where it supplies
+    # cumulative volume, retain a session VWAP from those real observations.
+    # This is deliberately labelled observation-based; it is not fabricated
+    # 5-minute OHLCV and never turns a candidate into an order recommendation.
+    session_date = now_ist().date()
+    signals = [
+        {
+            **signal,
+            "intraday_context": observe_intraday(
+                str(signal.get("symbol") or ""),
+                float(signal.get("ltp") or 0),
+                float(signal.get("volume") or 0),
+                session_date,
+            ),
+        }
+        for signal in signals
+    ]
     if signals:
         try:
             bars_by_symbol = repository.daily_equity_bars_for_symbols(
@@ -123,6 +168,10 @@ def _refresh_signals() -> list[dict]:
                     signal,
                     technical_context(bars_by_symbol.get(str(signal.get("symbol") or ""), [])),
                 )
+                for signal in signals
+            ]
+            signals = [
+                apply_intraday_observation_context(signal, signal.get("intraday_context"))
                 for signal in signals
             ]
             signals = [{
@@ -436,8 +485,45 @@ async def sources():
     """Declared public-data coverage; unavailable sources are never implied live."""
     return {
         "sources": public_source_inventory(),
+        "angel_one_market_data": {
+            "configured": angel_market_data is not None,
+            "mode": "read_only_quotes_and_candles" if angel_market_data else "disabled",
+            "order_execution": False,
+        },
         "policy": "Only public/free sources are used. A NOT_CONFIGURED source is not silently substituted or inferred.",
     }
+
+
+@app.get("/api/intraday/{symbol}")
+async def intraday_candles(symbol: str, interval: str = Query("FIVE_MINUTE")):
+    """Return read-only Angel One intraday candles when configured."""
+    if angel_market_data is None:
+        return {"symbol": symbol.upper(), "configured": False, "candles": [],
+                "message": "Angel One read-only market data is not configured"}
+    allowed = {"ONE_MINUTE", "THREE_MINUTE", "FIVE_MINUTE", "TEN_MINUTE",
+               "FIFTEEN_MINUTE", "THIRTY_MINUTE", "ONE_HOUR", "ONE_DAY"}
+    if interval not in allowed:
+        raise HTTPException(status_code=400, detail="Unsupported candle interval")
+    try:
+        candles = await asyncio.to_thread(
+            angel_market_data.intraday_candles, symbol.upper(), interval=interval,
+        )
+        closes = [float(c["close"]) for c in candles if float(c.get("close") or 0) > 0]
+        fast = calculate_ema(closes, 5)
+        slow = calculate_ema(closes, 13)
+        return {"symbol": symbol.upper(), "configured": True,
+                "source": "angel_one_read_only", "candles": candles,
+                "vwap": candle_vwap(candles),
+                "ema_fast": fast, "ema_slow": slow,
+                "trend": ("UPTREND" if fast is not None and slow is not None and fast > slow
+                           else "DOWNTREND" if fast is not None and slow is not None and fast < slow
+                           else "INSUFFICIENT_DATA"),
+                "order_execution": False}
+    except Exception as exc:
+        logger.exception("Angel One intraday candle request failed for %s", symbol)
+        return {"symbol": symbol.upper(), "configured": True, "candles": [],
+                "source": "angel_one_read_only", "error": str(exc),
+                "order_execution": False}
 
 
 @app.get("/api/oi-signals")

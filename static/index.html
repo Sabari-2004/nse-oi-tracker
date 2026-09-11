@@ -70,7 +70,7 @@
       </div>
       <div>
         <h1 class="text-base font-bold text-white leading-tight tracking-tight">NSE F&O OI Scanner</h1>
-        <p class="text-[10px] text-gray-500">Dynamic ? All F&O ? Real-time OI Signals ? Entry / TG / SL</p>
+        <p class="text-[10px] text-gray-500">Live NSE OI observations ? ATR context ? paper tracking only</p>
       </div>
     </div>
 
@@ -303,7 +303,7 @@
             <!-- Rows -->
             <template x-for="(row, idx) in filtered" :key="row.symbol">
               <tr class="border-t border-gray-800 hover:bg-gray-800/30 transition row-fade"
-                  :class="selectedSymbol === row.symbol ? 'bg-blue-950/15' : ''">
+                  :class="selectedSymbol === row.symbol ? 'bg-blue-950/15' : (row.confidence >= 75 ? 'bg-green-950/20' : row.confidence >= 55 ? 'bg-yellow-950/10' : '')">
 
                 <td class="px-3 py-2.5 text-gray-600 mono" x-text="idx+1"></td>
 
@@ -398,7 +398,7 @@
                             :class="!row.actionable || historySource === 'server' || alreadyAdded(row.symbol)
                               ? 'bg-gray-800 text-gray-600 border-gray-700 cursor-not-allowed'
                               : 'bg-purple-900/40 hover:bg-purple-800 text-purple-300 border-purple-700 hover:text-white'">
-                      <span x-text="!row.actionable ? 'Needs validation' : (alreadyAdded(row.symbol) ? '? Added' : '+ Trade')"></span>
+                      <span x-text="!row.actionable ? 'Needs validation (paper only)' : (alreadyAdded(row.symbol) ? '? Paper tracked' : '+ Paper track')"></span>
                     </button>
                     <button @click="openChain(row.symbol)"
                             class="text-[10px] px-2 py-1 rounded bg-blue-900/30 hover:bg-blue-800/60

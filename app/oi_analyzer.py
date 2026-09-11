@@ -90,10 +90,10 @@ def detect_cas_jump(symbol: str, price_change_pct: float, time_ist, oi_change_pc
 
 
 def classify_signal(price_change_pct: float, oi_change_pct: float) -> str:
-    price_up = price_change_pct >  PRICE_CHANGE_THRESHOLD
-    price_dn = price_change_pct < -PRICE_CHANGE_THRESHOLD
-    oi_up    = oi_change_pct    >  OI_CHANGE_THRESHOLD
-    oi_dn    = oi_change_pct    < -OI_CHANGE_THRESHOLD
+    price_up = price_change_pct >=  PRICE_CHANGE_THRESHOLD
+    price_dn = price_change_pct <= -PRICE_CHANGE_THRESHOLD
+    oi_up    = oi_change_pct    >=  OI_CHANGE_THRESHOLD
+    oi_dn    = oi_change_pct    <= -OI_CHANGE_THRESHOLD
     if price_up and oi_up:  return SIGNAL_LONG_BUILDUP
     if price_dn and oi_up:  return SIGNAL_SHORT_BUILDUP
     if price_up and oi_dn:  return SIGNAL_SHORT_COVERING
@@ -181,7 +181,8 @@ def _first_numeric(row: dict, fields: tuple[str, ...]) -> tuple[float, str | Non
 
 
 def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
-                      signal, is_cas_jump=False, low_liquidity=False) -> dict:
+                      signal, is_cas_jump=False, low_liquidity=False,
+                      volume=0.0) -> dict:
     meta = SIGNAL_META[signal]
     conf = confidence_score(price_chg_p, oi_chg_p, oi)
     if is_cas_jump and signal == SIGNAL_CAS_SHORT_COVERING:
@@ -201,6 +202,7 @@ def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
         "oi":               int(oi),
         "oi_change":        int(oi_chg),
         "oi_change_pct":    round(oi_chg_p, 2),
+        "volume":           int(volume or 0),
         "signal":           signal,
         "signal_label":     meta["label"],
         "signal_emoji":     meta["emoji"],
@@ -248,6 +250,9 @@ def _parse_row(row: dict) -> dict | None:
         "perOIChange", "oiChangePercent", "pOIchng", "oichngper",
         "oiChangePercentage", "changeInOIPercent", "pOIChange",
     ))
+    volume, _ = _first_numeric(row, (
+        "volume", "totalTradedVolume", "totalTradedVol", "tradedVolume", "vol",
+    ))
     _field_usage[sym] = {
         "oi_field": oi_field,
         "oi_change_field": oi_chg_field,
@@ -276,7 +281,8 @@ def _parse_row(row: dict) -> dict | None:
         return None
 
     result = _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
-                               signal, is_cas_jump=cas_jump, low_liquidity=low_liquidity)
+                               signal, is_cas_jump=cas_jump, low_liquidity=low_liquidity,
+                               volume=volume)
 
     # Keep LOW rows classified for diagnostics; scan_all_fno_realtime filters them.
     return result

@@ -12,13 +12,13 @@ INDICES = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
 
 # Minimum % price move to be "rising" or "falling"
 
-PRICE_CHANGE_THRESHOLD = 0.10    # 0.10% — catches meaningful intraday moves
+PRICE_CHANGE_THRESHOLD = 0.25    # 0.25% — filters ordinary tick noise
 
 
 
 # Minimum % OI change to be significant
 
-OI_CHANGE_THRESHOLD    = 0.50    # 0.50% — catches real OI buildup/unwinding
+OI_CHANGE_THRESHOLD    = 1.00    # 1.00% — filters mechanical OI churn
 
 
 
@@ -29,7 +29,7 @@ OI_CHANGE_THRESHOLD    = 0.50    # 0.50% — catches real OI buildup/unwinding
 # be discarded because the score awarded no points for modest price/OI moves.
 
 CONFIDENCE_HIGH   = 75   # ⭐⭐⭐⭐ — very high confidence
-CONFIDENCE_MEDIUM = 45   # ⭐⭐ — actionable, but less extreme
+CONFIDENCE_MEDIUM = 55   # ⭐⭐ — requires stronger independent evidence
 
 # Below MEDIUM → filtered out
 
@@ -39,7 +39,7 @@ CONFIDENCE_MEDIUM = 45   # ⭐⭐ — actionable, but less extreme
 
 # Minimum absolute OI in contracts (removes penny/illiquid F&O stocks)
 
-MIN_OI_ABSOLUTE = 10_000
+MIN_OI_ABSOLUTE = 50_000
 
 
 

@@ -84,3 +84,42 @@ def apply_daily_technical_context(
         }
     )
     return enriched
+
+
+def apply_intraday_observation_context(
+    candidate: dict[str, Any], context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Attach live-session VWAP evidence while keeping the safety boundary.
+
+    The current public NSE feed provides snapshots, not guaranteed OHLCV
+    candles. Therefore this context is descriptive only and can never make a
+    candidate actionable by itself.
+    """
+    enriched = dict(candidate)
+    context = context or {}
+    confirmed = list(enriched.get("confirmed_factors") or [])
+    missing = list(enriched.get("missing_confirmations") or [])
+    direction = str(enriched.get("signal_direction") or enriched.get("observed_direction") or "")
+    vwap = context.get("vwap")
+    price = float(enriched.get("ltp") or 0)
+    aligned = (
+        vwap is not None and price > 0 and
+        ((direction == "BUY" and price >= float(vwap)) or
+         (direction == "SELL" and price <= float(vwap)))
+    )
+    if aligned:
+        confirmed.append("live-session VWAP alignment")
+        missing = [item for item in missing if item != "VWAP alignment"]
+    elif vwap is not None:
+        missing.append("VWAP mismatch")
+    else:
+        missing.append("live-session VWAP unavailable")
+    enriched.update({
+        "intraday_context": context,
+        "intraday_vwap_alignment": "ALIGNED" if aligned else "UNAVAILABLE_OR_CONFLICTING",
+        "confirmed_factors": list(dict.fromkeys(confirmed)),
+        "missing_confirmations": list(dict.fromkeys(missing)),
+        "trade_recommendation": "NO_TRADE",
+        "actionable": False,
+    })
+    return enriched
