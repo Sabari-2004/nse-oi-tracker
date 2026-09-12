@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>NSE F&O OI Scanner 📡</title>
+  <title>NSE F&O OI Scanner ??</title>
 
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -58,19 +58,19 @@
 <body class="bg-gray-950 text-gray-100 min-h-screen"
       x-data="scanner()" x-init="boot()">
 
-<!-- ═══════════════════════════════════════ HEADER ═══════════════════════ -->
+<!-- ??????????????????????????????????????? HEADER ??????????????????????? -->
 <header class="bg-gray-900/95 backdrop-blur border-b border-gray-800 sticky top-0 z-50">
   <div class="max-w-screen-2xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
 
     <div class="flex items-center gap-3">
       <div class="relative">
-        <span class="text-2xl">📡</span>
+        <span class="text-2xl">??</span>
         <span x-show="marketOpen" class="absolute -top-0.5 -right-0.5 w-2.5 h-2.5
               bg-green-400 rounded-full pulse-dot border-2 border-gray-900"></span>
       </div>
       <div>
         <h1 class="text-base font-bold text-white leading-tight tracking-tight">NSE F&O OI Scanner</h1>
-        <p class="text-[10px] text-gray-500">Dynamic · All F&O · Real-time OI Signals · Entry / TG / SL</p>
+        <p class="text-[10px] text-gray-500">Live NSE OI observations ? ATR context ? paper tracking only</p>
       </div>
     </div>
 
@@ -82,7 +82,7 @@
              : 'bg-gray-800 border-gray-700 text-gray-400'">
         <span class="w-1.5 h-1.5 rounded-full"
               :class="marketOpen ? 'bg-green-400 pulse-dot' : 'bg-gray-500'"></span>
-        <span x-text="marketOpen ? '● Market Live' : '○ Market Closed'"></span>
+        <span x-text="marketOpen ? '? Market Live' : '? Market Closed'"></span>
       </div>
 
       <!-- IST clock -->
@@ -98,13 +98,13 @@
       <!-- HIGH confidence badge -->
       <div x-show="highConf > 0"
            class="bg-green-950 border border-green-800 px-2.5 py-1 rounded-full text-xs font-semibold text-green-300">
-        ⭐⭐⭐ <span x-text="highConf"></span> HIGH
+        ??? <span x-text="highConf"></span> HIGH
       </div>
 
       <!-- MEDIUM confidence badge -->
       <div x-show="mediumConf > 0"
            class="bg-blue-950 border border-blue-800 px-2.5 py-1 rounded-full text-xs font-semibold text-blue-300">
-        ⭐⭐ <span x-text="mediumConf"></span> MED
+        ?? <span x-text="mediumConf"></span> MED
       </div>
 
       <!-- Trades badge -->
@@ -117,14 +117,14 @@
 
       <!-- Countdown / refresh -->
       <div class="flex items-center gap-1.5">
-        <span class="text-xs text-gray-600">↺</span>
+        <span class="text-xs text-gray-600">?</span>
         <span class="mono text-xs text-brand font-bold bg-blue-950 border border-blue-900 px-2 py-1 rounded"
               x-text="countdown + 's'"></span>
         <button @click="forceRefresh()" :disabled="loading"
                 class="text-xs bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300
                        px-2.5 py-1 rounded border border-gray-700 transition">
-          <span x-show="!loading">⟳ Refresh</span>
-          <span x-show="loading" class="blink">Scanning…</span>
+          <span x-show="!loading">? Refresh</span>
+          <span x-show="loading" class="blink">Scanning?</span>
         </button>
       </div>
     </div>
@@ -136,10 +136,41 @@
   <!-- Error banner -->
   <div x-show="error" x-transition
        class="bg-red-950/80 border border-red-800 text-red-300 text-xs rounded-lg px-4 py-3 flex gap-2">
-    ⚠️ <span x-text="error"></span>
+    ?? <span x-text="error"></span>
   </div>
 
-  <!-- ═══════════════ SIGNAL SUMMARY CARDS ═══════════════ -->
+  <!-- Public NSE market context, distinct from any scanner recommendation -->
+  <div x-show="marketOverview" class="bg-gray-900 rounded-xl border border-gray-800 p-3.5">
+    <div class="flex flex-wrap items-center gap-2 mb-3">
+      <h2 class="text-xs font-bold text-gray-200">Market Context ? Public NSE Data</h2>
+      <span class="text-[10px] text-gray-600 mono" x-text="marketOverview?.nse_timestamp || 'NSE timestamp unavailable'"></span>
+      <span class="text-[10px] text-amber-400">Context only ? not a trade signal</span>
+      <div class="flex-1"></div>
+      <button @click="fetchMarketOverview(true)" class="text-[10px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-white hover:bg-gray-800">Refresh context</button>
+    </div>
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+      <template x-for="key in ['NIFTY','BANKNIFTY','FINNIFTY','MIDCPNIFTY','INDIA_VIX']" :key="key">
+        <div class="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2.5">
+          <div class="text-[10px] text-gray-500" x-text="marketOverview.indices[key]?.name || key"></div>
+          <div class="text-sm mono font-semibold text-gray-200" x-text="marketOverview.indices[key]?.last != null ? fmt2(marketOverview.indices[key].last) : '?'"></div>
+          <div class="text-[10px] mono" :class="(marketOverview.indices[key]?.change_pct || 0) >= 0 ? 'text-green-400' : 'text-red-400'"
+               x-text="marketOverview.indices[key]?.change_pct != null ? ((marketOverview.indices[key].change_pct >= 0 ? '+' : '') + marketOverview.indices[key].change_pct.toFixed(2) + '%') : 'unavailable'"></div>
+        </div>
+      </template>
+      <div class="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2.5">
+        <div class="text-[10px] text-gray-500">Breadth A / D</div>
+        <div class="text-sm mono font-semibold text-gray-200" x-text="(marketOverview.market_breadth.advances ?? '?') + ' / ' + (marketOverview.market_breadth.declines ?? '?')"></div>
+        <div class="text-[10px] text-gray-500" x-text="marketOverview.market_breadth.advance_decline_ratio != null ? 'A/D ' + marketOverview.market_breadth.advance_decline_ratio.toFixed(2) : 'unavailable'"></div>
+      </div>
+    </div>
+    <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-gray-500">
+      <span x-text="'FII/FPI cash net: ' + fmtCrore(marketOverview.fii_dii_cash_activity.FII_FPI?.net_value_crore)"></span>
+      <span x-text="'DII cash net: ' + fmtCrore(marketOverview.fii_dii_cash_activity.DII?.net_value_crore)"></span>
+      <span x-text="marketOverview.data_caveat"></span>
+    </div>
+  </div>
+
+  <!-- ??????????????? SIGNAL SUMMARY CARDS ??????????????? -->
   <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
     <template x-for="s in SIG_TYPES" :key="s.key">
       <button @click="toggleFilter(s.key)"
@@ -155,25 +186,25 @@
     </template>
   </div>
 
-  <!-- ═══════════════ TABS ═══════════════ -->
+  <!-- ??????????????? TABS ??????????????? -->
   <div class="flex items-center gap-0 border-b border-gray-800">
-    <template x-for="tab in ['signals','chain','trades','guide']" :key="tab">
+    <template x-for="tab in ['signals','chain','heatmap','intel','news','analytics','trades','guide']" :key="tab">
       <button @click="activeTab = tab"
               class="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-300 transition capitalize"
               :class="activeTab === tab ? 'tab-active' : ''">
-        <span x-text="{signals:'📊 Signals', chain:'🔗 Option Chain', trades:'📋 Trade History', guide:'📚 Guide'}[tab]"></span>
+        <span x-text="{signals:'?? Signals', chain:'?? Option Chain', heatmap:'?? OI Heatmap', intel:'?? Intelligence', news:'?? Disclosures', analytics:'?? Analytics', trades:'?? Trade History', guide:'?? Guide'}[tab]"></span>
         <template x-if="tab === 'trades' && trades.length > 0">
           <span class="ml-1 text-xs bg-purple-900 text-purple-300 px-1.5 rounded-full"
                 x-text="trades.length"></span>
         </template>
         <template x-if="tab === 'chain' && selectedSymbol">
-          <span class="ml-1 text-xs text-brand mono" x-text="'· ' + selectedSymbol"></span>
+          <span class="ml-1 text-xs text-brand mono" x-text="'? ' + selectedSymbol"></span>
         </template>
       </button>
     </template>
   </div>
 
-  <!-- ═══════════════════════════════════ SIGNALS TAB ═══════════════════════ -->
+  <!-- ??????????????????????????????????? SIGNALS TAB ??????????????????????? -->
   <div x-show="activeTab === 'signals'" x-transition>
     <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
 
@@ -202,26 +233,35 @@
         </div>
 
         <!-- Search -->
-        <input x-model="search" type="text" placeholder="Search…"
+        <input x-model="search" type="text" placeholder="Search?"
                class="bg-gray-800 border border-gray-700 text-xs text-gray-200 placeholder-gray-600
                       rounded px-2 py-1.5 w-24 focus:outline-none focus:border-brand"/>
 
         <!-- Sort -->
         <select x-model="sortBy"
                 class="bg-gray-800 border border-gray-700 text-xs text-gray-300 rounded px-2 py-1.5 focus:outline-none">
-          <option value="confidence">↓ Confidence</option>
-          <option value="strength">↓ Strength</option>
-          <option value="oi_change_pct">↓ OI%</option>
-          <option value="price_change_pct">↓ Price%</option>
-          <option value="symbol">A–Z</option>
+          <option value="confidence">? Confidence</option>
+          <option value="strength">? Strength</option>
+          <option value="oi_change_pct">? OI%</option>
+          <option value="price_change_pct">? Price%</option>
+          <option value="symbol">A?Z</option>
         </select>
 
         <!-- Confidence filter -->
         <select x-model="confidenceFilter"
                 class="bg-gray-800 border border-gray-700 text-xs text-gray-300 rounded px-2 py-1.5 focus:outline-none">
           <option value="">All Confidence</option>
-          <option value="HIGH">⭐⭐⭐ HIGH only</option>
-          <option value="MEDIUM">⭐⭐ MEDIUM only</option>
+          <option value="HIGH">??? HIGH only</option>
+          <option value="MEDIUM">?? MEDIUM only</option>
+        </select>
+
+        <!-- The NSE OI feed has no sector field; unknown symbols remain visibly unclassified. -->
+        <select x-model="sectorFilter"
+                class="bg-gray-800 border border-gray-700 text-xs text-gray-300 rounded px-2 py-1.5 focus:outline-none">
+          <option value="">All sectors</option>
+          <template x-for="sector in availableSectors" :key="sector">
+            <option :value="sector" x-text="sector"></option>
+          </template>
         </select>
       </div>
 
@@ -232,9 +272,10 @@
             <tr>
               <th class="px-3 py-2.5 text-left font-medium">#</th>
               <th class="px-3 py-2.5 text-left font-medium">Symbol</th>
+              <th class="px-3 py-2.5 text-left font-medium">Sector</th>
               <th class="px-3 py-2.5 text-left font-medium">Signal</th>
               <th class="px-3 py-2.5 text-left font-medium">Dir</th>
-              <th class="px-3 py-2.5 text-right font-medium">LTP ₹</th>
+              <th class="px-3 py-2.5 text-right font-medium">LTP ?</th>
               <th class="px-3 py-2.5 text-right font-medium">Price%</th>
               <th class="px-3 py-2.5 text-right font-medium">OI%</th>
               <th class="px-3 py-2.5 text-right font-medium lv-entry">Entry</th>
@@ -251,7 +292,7 @@
             <template x-if="loading && signals.length === 0">
               <template x-for="i in 10">
                 <tr class="border-t border-gray-800">
-                  <td colspan="12" class="px-3 py-2.5">
+                  <td colspan="13" class="px-3 py-2.5">
                     <div class="h-3 bg-gray-800 animate-pulse rounded"
                          :style="`width:${50+Math.random()*40}%`"></div>
                   </td>
@@ -262,7 +303,7 @@
             <!-- Rows -->
             <template x-for="(row, idx) in filtered" :key="row.symbol">
               <tr class="border-t border-gray-800 hover:bg-gray-800/30 transition row-fade"
-                  :class="selectedSymbol === row.symbol ? 'bg-blue-950/15' : ''">
+                  :class="selectedSymbol === row.symbol ? 'bg-blue-950/15' : (row.confidence >= 75 ? 'bg-green-950/20' : row.confidence >= 55 ? 'bg-yellow-950/10' : '')">
 
                 <td class="px-3 py-2.5 text-gray-600 mono" x-text="idx+1"></td>
 
@@ -271,6 +312,8 @@
                           class="font-bold text-white mono hover:text-brand transition"
                           x-text="row.symbol"></button>
                 </td>
+
+                <td class="px-3 py-2.5 text-[10px] text-gray-400" x-text="row.sector || 'Unclassified'"></td>
 
                 <!-- Signal badge -->
                 <td class="px-3 py-2.5">
@@ -286,19 +329,23 @@
                   </span>
                 </td>
 
-                <!-- Direction badge -->
+                <!-- Recommendation / candidate boundary -->
                 <td class="px-3 py-2.5">
                   <span class="badge"
-                        :class="row.signal_direction==='BUY'
+                        :class="row.actionable && row.signal_direction==='BUY'
                           ? 'bg-blue-950 text-blue-300 border-blue-800'
-                          : 'bg-orange-950 text-orange-300 border-orange-800'"
-                        x-text="row.signal_direction==='BUY' ? '↑ BUY' : '↓ SELL'"></span>
+                          : row.actionable
+                            ? 'bg-orange-950 text-orange-300 border-orange-800'
+                            : 'bg-gray-800 text-amber-300 border-gray-700'"
+                        x-text="row.actionable
+                          ? (row.signal_direction==='BUY' ? '? BUY' : '? SELL')
+                          : 'OBSERVE ? NO TRADE'"></span>
                 </td>
 
                 <!-- LTP -->
                 <td class="px-3 py-2.5 text-right mono font-semibold"
                     :class="row.price_change_pct >= 0 ? 'text-green-400' : 'text-red-400'"
-                    x-text="row.ltp ? '₹' + fmt2(row.ltp) : '—'"></td>
+                    x-text="row.ltp ? '?' + fmt2(row.ltp) : '?'"></td>
 
                 <!-- Price % -->
                 <td class="px-3 py-2.5 text-right mono"
@@ -312,48 +359,46 @@
 
                 <!-- Entry -->
                 <td class="px-3 py-2.5 text-right mono font-semibold lv-entry"
-                    x-text="'₹' + fmt2(levels(row).entry)"></td>
+                    x-text="row.actionable ? '?' + fmt2(levels(row).entry) : '?'"></td>
 
                 <!-- TG1 -->
                 <td class="px-3 py-2.5 text-right mono lv-tg1"
-                    x-text="'₹' + fmt2(levels(row).tg1)"></td>
+                    x-text="row.actionable ? '?' + fmt2(levels(row).tg1) : '?'"></td>
 
                 <!-- TG2 -->
                 <td class="px-3 py-2.5 text-right mono lv-tg2"
-                    x-text="'₹' + fmt2(levels(row).tg2)"></td>
+                    x-text="row.actionable ? '?' + fmt2(levels(row).tg2) : '?'"></td>
 
                 <!-- SL -->
                 <td class="px-3 py-2.5 text-right mono lv-sl"
-                    x-text="'₹' + fmt2(levels(row).sl)"></td>
+                    x-text="row.actionable ? '?' + fmt2(levels(row).sl) : '?'"></td>
 
-                <!-- Score, factor audit, and recommendation -->
+                <!-- Confidence tier -->
                 <td class="px-3 py-2.5">
-                  <div class="flex items-center gap-1.5 mb-1">
-                    <div class="w-16 bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                  <div class="flex items-center gap-1.5">
+                    <div class="w-10 bg-gray-800 rounded-full h-1.5 overflow-hidden">
                       <div class="h-full rounded-full strength-fill"
-                           :style="`width:${row.score||row.confidence||0}%`"
-                           :class="row.actionable ? 'bg-green-500' : (row.score >= 45 ? 'bg-yellow-500' : 'bg-red-500')"></div>
+                           :style="`width:${row.confidence||0}%`"
+                           :class="row.confidence_tier==='HIGH' ? 'bg-green-500' : 'bg-blue-500'"></div>
                     </div>
-                    <b class="mono text-xs" :class="row.actionable ? 'text-green-300' : 'text-yellow-300'"
-                       x-text="(row.score||row.confidence||0) + '/100'"></b>
-                    <span class="badge" :class="row.actionable ? 'bg-green-950 text-green-300 border-green-800' : 'bg-gray-800 text-gray-400 border-gray-700'"
-                          x-text="row.actionable ? 'ACTIONABLE' : 'NO TRADE'"></span>
+                    <span class="badge"
+                          :class="row.confidence_tier==='HIGH'
+                            ? 'bg-green-950 text-green-300 border-green-800'
+                            : 'bg-blue-950 text-blue-300 border-blue-800'"
+                          x-text="row.confidence_tier==='HIGH' ? '??? HIGH' : '?? MED'"></span>
                   </div>
-                  <div class="text-[9px] text-green-500 max-w-52" x-text="'Confirmed: ' + ((row.confirmed_factors||[]).join(' · ') || 'none')"></div>
-                  <div class="text-[9px] text-red-400 max-w-52" x-show="(row.missing_factors||[]).length"
-                       x-text="'Missing: ' + (row.missing_factors||[]).join(' · ')"></div>
                 </td>
 
                 <!-- Actions -->
                 <td class="px-3 py-2.5">
                   <div class="flex items-center gap-1.5">
                     <button @click="addTrade(row)"
-                            :disabled="alreadyAdded(row.symbol)"
+                            :disabled="!row.actionable || historySource === 'server' || alreadyAdded(row.symbol)"
                             class="text-[10px] px-2 py-1 rounded border transition font-medium"
-                            :class="alreadyAdded(row.symbol)
+                            :class="!row.actionable || historySource === 'server' || alreadyAdded(row.symbol)
                               ? 'bg-gray-800 text-gray-600 border-gray-700 cursor-not-allowed'
                               : 'bg-purple-900/40 hover:bg-purple-800 text-purple-300 border-purple-700 hover:text-white'">
-                      <span x-text="alreadyAdded(row.symbol) ? '✓ Added' : '+ Trade'"></span>
+                      <span x-text="!row.actionable ? 'Needs validation (paper only)' : (alreadyAdded(row.symbol) ? '? Paper tracked' : '+ Paper track')"></span>
                     </button>
                     <button @click="openChain(row.symbol)"
                             class="text-[10px] px-2 py-1 rounded bg-blue-900/30 hover:bg-blue-800/60
@@ -368,16 +413,16 @@
 
             <!-- Empty states -->
             <template x-if="!loading && filtered.length === 0 && signals.length === 0">
-              <tr><td colspan="12" class="py-20 text-center text-gray-600">
-                <div class="text-5xl mb-3 opacity-30">📭</div>
+              <tr><td colspan="13" class="py-20 text-center text-gray-600">
+                <div class="text-5xl mb-3 opacity-30">??</div>
                 <div class="text-sm" x-text="marketOpen
-                  ? 'Scanning all F&O stocks… No strong signals yet. Try refresh.'
-                  : (marketStatusLabel || 'Market closed (Mon–Fri 09:15–15:30 IST). Signals appear during live market.')">
+                  ? 'Scanning all F&O stocks? No strong signals yet. Try refresh.'
+                  : (marketStatusLabel || 'Market closed (Mon?Fri 09:15?15:30 IST). Signals appear during live market.')">
                 </div>
               </td></tr>
             </template>
             <template x-if="!loading && filtered.length === 0 && signals.length > 0">
-              <tr><td colspan="12" class="py-10 text-center text-gray-600 text-sm">
+              <tr><td colspan="13" class="py-10 text-center text-gray-600 text-sm">
                 No match for current filter. 
                 <button @click="activeFilter=''; search=''" class="text-brand underline">Clear</button>
               </td></tr>
@@ -389,7 +434,7 @@
     </div>
   </div><!-- end signals tab -->
 
-  <!-- ═══════════════════════════════════ OPTION CHAIN TAB ══════════════════ -->
+  <!-- ??????????????????????????????????? OPTION CHAIN TAB ?????????????????? -->
   <div x-show="activeTab === 'chain'" x-transition>
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
@@ -430,7 +475,7 @@
                       :class="row.confidence_tier==='HIGH'
                         ? 'bg-green-950 text-green-300 border-green-800'
                         : 'bg-blue-950 text-blue-300 border-blue-800'"
-                      x-text="row.confidence_tier==='HIGH'?'⭐H':'⭐M'"></span>
+                      x-text="row.confidence_tier==='HIGH'?'?H':'?M'"></span>
               </div>
             </button>
           </template>
@@ -445,7 +490,7 @@
         <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800">
           <h3 class="text-sm font-semibold text-gray-300">
             Option Chain
-            <span x-show="selectedSymbol" class="text-brand mono ml-1" x-text="'· ' + selectedSymbol"></span>
+            <span x-show="selectedSymbol" class="text-brand mono ml-1" x-text="'? ' + selectedSymbol"></span>
           </h3>
           <div class="flex items-center gap-2">
             <span x-show="chainData && !chainData.error" class="text-xs text-gray-600">
@@ -453,21 +498,21 @@
             </span>
             <button x-show="selectedSymbol && !chainLoading"
                     @click="openChain(selectedSymbol, true)"
-                    class="text-xs text-gray-500 hover:text-brand transition">⟳ Refresh</button>
+                    class="text-xs text-gray-500 hover:text-brand transition">? Refresh</button>
           </div>
         </div>
 
         <!-- NSE error state -->
         <div x-show="chainData && chainData.error"
              class="px-4 py-6 text-center">
-          <div class="text-3xl mb-2">⚠️</div>
+          <div class="text-3xl mb-2">??</div>
           <div class="text-sm text-amber-400 font-medium" x-text="chainData?.error"></div>
           <div class="text-xs text-gray-500 mt-2">
             NSE may be restricting this endpoint from cloud IPs. Try again during peak market hours.
           </div>
           <button @click="openChain(selectedSymbol, true)"
                   class="mt-3 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded border border-gray-700 transition">
-            ⟳ Retry
+            ? Retry
           </button>
         </div>
 
@@ -493,14 +538,23 @@
             <span class="text-[10px] text-gray-500" x-text="chainDirection().detail"></span>
           </div>
           <div class="text-[10px] text-gray-600 mt-1"
-               x-text="'Confirmation: ' + chainDirection().factors + ' · Informational bias, not a standalone trade signal'"></div>
+               x-text="'Confirmation: ' + chainDirection().factors + ' ? Informational bias, not a standalone trade signal'"></div>
+        </div>
+
+        <div x-show="chainData && !chainData.error && chainData.pcr_trend"
+             class="px-4 py-3 border-b border-gray-800 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+          <div><span class="text-gray-600">PCR timeline</span><b class="block mono text-gray-300" x-text="(chainData.pcr_trend?.samples || 0) + ' snapshots'"></b></div>
+          <div><span class="text-gray-600">PCR change</span><b class="block mono text-blue-300" x-text="chainData.pcr_trend?.pcr_change != null ? (chainData.pcr_trend.pcr_change >= 0 ? '+' : '') + chainData.pcr_trend.pcr_change.toFixed(2) : '?'"></b></div>
+          <div><span class="text-gray-600">Max pain shift</span><b class="block mono text-purple-300" x-text="chainData.pcr_trend?.max_pain_change != null ? (chainData.pcr_trend.max_pain_change >= 0 ? '+' : '') + fmt2(chainData.pcr_trend.max_pain_change) : '?'"></b></div>
+          <div><span class="text-gray-600">PCR state</span><b class="block mono text-amber-300" x-text="chainData.pcr_trend?.pcr_state || 'INSUFFICIENT_HISTORY'"></b></div>
+          <p class="col-span-full text-[10px] text-gray-600">Timeline is derived from stored public option-chain observations; it is not a standalone trade signal.</p>
         </div>
 
         <!-- OI bar chart -->
         <div x-show="chainData && !chainData.error && chainData.strikes && chainData.strikes.length > 0"
              class="px-4 py-3 border-b border-gray-800">
           <div class="flex justify-between text-[10px] text-gray-600 mb-1.5">
-            <span>CE (Red) vs PE (Green) OI — ATM ± 10 strikes</span>
+            <span>CE (Red) vs PE (Green) OI ? ATM ? 10 strikes</span>
             <span>
               CE: <b class="text-red-400" x-text="fmtOI(chainData?.total_ce_oi)"></b>
               &nbsp;|&nbsp;
@@ -514,21 +568,21 @@
         <div class="overflow-y-auto scrollbar-thin" style="max-height:360px">
           <div x-show="!selectedSymbol && !chainLoading"
                class="text-center py-16 text-gray-600">
-            <div class="text-4xl mb-2">📈</div>
+            <div class="text-4xl mb-2">??</div>
             <div class="text-sm">Type a symbol above or click a signal stock</div>
             <div class="text-xs mt-2 text-gray-700">Supports NIFTY, BANKNIFTY, FINNIFTY, and all F&O stocks</div>
           </div>
           <div x-show="chainLoading" class="text-center py-10 text-gray-500 blink text-sm">
-            Loading chain…
+            Loading chain?
           </div>
           <template x-if="chainData && !chainData.error && chainData.strikes && chainData.strikes.length > 0 && !chainLoading">
             <table class="w-full text-[11px]">
               <thead class="sticky top-0 bg-gray-950">
                 <tr>
                   <th class="px-3 py-2 text-red-500 text-right font-medium w-1/4">CE OI</th>
-                  <th class="px-3 py-2 text-red-500 text-right font-medium">CE ΔOI</th>
+                  <th class="px-3 py-2 text-red-500 text-right font-medium">CE ?OI</th>
                   <th class="px-3 py-2 text-center text-gray-400 font-bold">STRIKE</th>
-                  <th class="px-3 py-2 text-green-500 text-left font-medium">PE ΔOI</th>
+                  <th class="px-3 py-2 text-green-500 text-left font-medium">PE ?OI</th>
                   <th class="px-3 py-2 text-green-500 text-left font-medium w-1/4">PE OI</th>
                 </tr>
               </thead>
@@ -563,14 +617,159 @@
     </div>
   </div><!-- end chain tab -->
 
-  <!-- ═══════════════════════════════════ TRADE HISTORY TAB ═════════════════ -->
+  <!-- OI heatmap is an intensity ladder, separate from recommendation logic. -->
+  <div x-show="activeTab === 'heatmap'" x-transition>
+    <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+      <div class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-gray-800">
+        <div>
+          <h2 class="text-sm font-semibold text-gray-200">Option OI Heatmap</h2>
+          <p class="text-[10px] text-gray-500">Colour intensity is relative to the returned strike window. It does not predict price.</p>
+        </div>
+        <div class="flex-1"></div>
+        <input x-model="heatmapSymbol" @keydown.enter="loadHeatmap(heatmapSymbol, true)" placeholder="e.g. NIFTY"
+               class="bg-gray-800 border border-gray-700 text-xs text-gray-200 placeholder-gray-600 rounded px-2 py-1.5 w-32 uppercase focus:outline-none focus:border-brand"/>
+        <button @click="loadHeatmap(heatmapSymbol || selectedSymbol, true)" :disabled="heatmapLoading"
+                class="text-xs bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300 px-2.5 py-1 rounded border border-gray-700">Load chain</button>
+      </div>
+      <div x-show="heatmapLoading" class="p-8 text-center text-xs text-gray-500">Loading public NSE chain?</div>
+      <div x-show="heatmapData?.error" class="p-8 text-center text-xs text-amber-400" x-text="heatmapData?.error"></div>
+      <div x-show="!heatmapLoading && !heatmapData?.error && !heatmapData?.strikes?.length" class="p-12 text-center text-xs text-gray-600">Choose an index or F&amp;O symbol to view the current OI ladder.</div>
+      <div class="overflow-x-auto" x-show="!heatmapLoading && heatmapData?.strikes?.length">
+        <table class="w-full text-xs">
+          <thead class="bg-gray-950 text-gray-500"><tr><th class="px-3 py-2 text-right">CE OI</th><th class="px-3 py-2 text-right">CE ?OI</th><th class="px-3 py-2 text-center">Strike</th><th class="px-3 py-2 text-left">PE ?OI</th><th class="px-3 py-2 text-left">PE OI</th></tr></thead>
+          <tbody>
+            <template x-for="row in heatmapData?.strikes || []" :key="row.strike">
+              <tr class="border-t border-gray-800">
+                <td class="px-3 py-2 text-right mono text-red-200" :style="'background-color: rgba(239,68,68,' + (0.08 + row.ce_oi_intensity * 0.42) + ')'" x-text="fmtOI(row.ce_oi)"></td>
+                <td class="px-3 py-2 text-right mono" :class="row.ce_doi >= 0 ? 'text-red-400' : 'text-green-400'" :style="'background-color: rgba(239,68,68,' + (0.04 + row.ce_doi_intensity * 0.25) + ')'" x-text="(row.ce_doi >= 0 ? '+' : '') + fmtOI(row.ce_doi)"></td>
+                <td class="px-3 py-2 text-center mono font-bold text-gray-200" x-text="row.strike.toLocaleString('en-IN')"></td>
+                <td class="px-3 py-2 text-left mono" :class="row.pe_doi >= 0 ? 'text-green-400' : 'text-red-400'" :style="'background-color: rgba(34,197,94,' + (0.04 + row.pe_doi_intensity * 0.25) + ')'" x-text="(row.pe_doi >= 0 ? '+' : '') + fmtOI(row.pe_doi)"></td>
+                <td class="px-3 py-2 text-left mono text-green-200" :style="'background-color: rgba(34,197,94,' + (0.08 + row.pe_oi_intensity * 0.42) + ')'" x-text="fmtOI(row.pe_oi)"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+      <p x-show="heatmapData?.methodology_caveat" class="px-4 py-3 text-[10px] text-gray-600 border-t border-gray-800" x-text="heatmapData?.methodology_caveat"></p>
+    </div>
+  </div><!-- end heatmap tab -->
+
+  <!-- Public-source market intelligence: clear coverage rather than inferred feeds. -->
+  <div x-show="activeTab === 'intel'" x-transition>
+    <div class="space-y-4">
+      <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+        <div class="flex items-start gap-3">
+          <div><h2 class="text-sm font-semibold text-gray-200">Public-Data Market Intelligence</h2><p class="text-[10px] text-amber-400 mt-1">Context only. Scanner outputs remain NO TRADE observations.</p></div>
+          <div class="flex-1"></div>
+          <button @click="fetchIntelligence()" :disabled="intelligenceLoading" class="text-xs text-gray-400 hover:text-white border border-gray-700 rounded px-2 py-1">Refresh</button>
+        </div>
+        <div x-show="intelligenceLoading" class="p-8 text-center text-xs text-gray-500">Preparing public-data briefing?</div>
+        <div x-show="intelligence && !intelligenceLoading" class="mt-4 space-y-4">
+          <p class="text-xs text-gray-300" x-text="intelligence?.headline"></p>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+            <div class="bg-gray-950 border border-gray-800 rounded-lg p-3"><div class="text-[10px] text-gray-500">Market regime</div><div class="mt-1 mono text-brand font-bold" x-text="intelligence?.market_regime"></div></div>
+            <div class="bg-gray-950 border border-gray-800 rounded-lg p-3"><div class="text-[10px] text-gray-500">India VIX</div><div class="mt-1 mono text-gray-200 font-bold" x-text="intelligence?.india_vix ?? 'unavailable'"></div></div>
+            <div class="bg-gray-950 border border-gray-800 rounded-lg p-3"><div class="text-[10px] text-gray-500">Advances</div><div class="mt-1 mono text-green-300 font-bold" x-text="intelligence?.breadth?.advances ?? 'unavailable'"></div></div>
+            <div class="bg-gray-950 border border-gray-800 rounded-lg p-3"><div class="text-[10px] text-gray-500">Declines</div><div class="mt-1 mono text-red-300 font-bold" x-text="intelligence?.breadth?.declines ?? 'unavailable'"></div></div>
+          </div>
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div class="bg-gray-950 border border-gray-800 rounded-lg p-3"><h3 class="text-xs text-gray-400 mb-2">Current candidate classifications</h3><div class="space-y-1"><template x-for="item in objectRows(intelligence?.candidate_counts)" :key="item.name"><div class="flex justify-between text-xs"><span class="text-gray-300" x-text="item.name.replaceAll('_',' ')"></span><b class="mono text-blue-300" x-text="item.value"></b></div></template></div></div>
+            <div class="bg-gray-950 border border-gray-800 rounded-lg p-3"><h3 class="text-xs text-gray-400 mb-2">High event-risk disclosures</h3><div class="space-y-1"><template x-for="item in intelligence?.high_event_disclosures || []" :key="item.announcement_id"><div class="text-xs text-gray-300"><span class="mono text-brand" x-text="item.symbol"></span><span class="ml-2" x-text="item.title"></span></div></template><div x-show="!(intelligence?.high_event_disclosures || []).length" class="text-xs text-gray-600">None in stored public NSE feed.</div></div></div>
+          </div>
+          <div class="bg-gray-950 border border-gray-800 rounded-lg overflow-hidden">
+            <div class="flex items-center gap-2 px-3 py-2 border-b border-gray-800"><h3 class="text-xs text-gray-400">NSE participant-wise OI ? EOD only</h3><span class="text-[10px] text-gray-600" x-text="participantOI?.report_date || 'not downloaded yet'"></span><div class="flex-1"></div><button @click="fetchParticipantOI(true)" class="text-[10px] text-gray-500 hover:text-white">Refresh report</button></div>
+            <div class="overflow-x-auto"><table class="w-full text-[11px]"><thead class="text-gray-600"><tr><th class="px-3 py-2 text-left">Participant</th><th class="px-3 py-2 text-right">Net index futures</th><th class="px-3 py-2 text-right">Net stock futures</th></tr></thead><tbody><template x-for="row in participantOI?.participants || []" :key="row.participant"><tr class="border-t border-gray-800/60"><td class="px-3 py-2 mono text-gray-300" x-text="row.participant"></td><td class="px-3 py-2 text-right mono" :class="row.net_index_futures >= 0 ? 'text-green-300' : 'text-red-300'" x-text="(row.net_index_futures >= 0 ? '+' : '') + row.net_index_futures.toLocaleString('en-IN')"></td><td class="px-3 py-2 text-right mono" :class="row.net_stock_futures >= 0 ? 'text-green-300' : 'text-red-300'" x-text="(row.net_stock_futures >= 0 ? '+' : '') + row.net_stock_futures.toLocaleString('en-IN')"></td></tr></template><tr x-show="!(participantOI?.participants || []).length"><td colspan="3" class="px-3 py-3 text-gray-600">No stored EOD participant report yet.</td></tr></tbody></table></div>
+          </div>
+          <p class="text-[10px] text-gray-600" x-text="intelligence?.caveat"></p>
+        </div>
+      </div>
+    </div>
+  </div><!-- end intelligence tab -->
+
+  <!-- Public NSE disclosures: event-volatility context, never headline sentiment. -->
+  <div x-show="activeTab === 'news'" x-transition>
+    <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+      <div class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-gray-800">
+        <div>
+          <h2 class="text-sm font-semibold text-gray-200">NSE Corporate Disclosures</h2>
+          <p class="text-[10px] text-gray-500">Public NSE filings are classified for possible event volatility, not bullish/bearish sentiment.</p>
+        </div>
+        <div class="flex-1"></div>
+        <input x-model="newsSymbol" @keydown.enter="fetchNews(true)" placeholder="Filter symbol"
+               class="bg-gray-800 border border-gray-700 text-xs text-gray-200 placeholder-gray-600 rounded px-2 py-1.5 w-32 uppercase focus:outline-none focus:border-brand"/>
+        <button @click="fetchNews(true)" :disabled="newsLoading"
+                class="text-xs bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300 px-2.5 py-1 rounded border border-gray-700">Refresh NSE</button>
+      </div>
+      <div x-show="newsLoading" class="p-6 text-center text-xs text-gray-500">Loading public disclosures?</div>
+      <div x-show="!newsLoading && news.length === 0" class="p-10 text-center text-xs text-gray-600">No stored disclosure records yet. Use Refresh NSE to fetch the latest public feed.</div>
+      <div class="divide-y divide-gray-800" x-show="!newsLoading && news.length">
+        <template x-for="item in news" :key="item.announcement_id">
+          <article class="px-4 py-3 hover:bg-gray-800/30">
+            <div class="flex flex-wrap gap-2 items-center">
+              <button @click="openChain(item.symbol)" class="mono text-xs font-bold text-brand hover:text-sky-300" x-text="item.symbol"></button>
+              <span class="badge" :class="item.event_risk === 'HIGH_EVENT_RISK' ? 'bg-red-950 text-red-300 border-red-800' : item.event_risk === 'MEDIUM_EVENT_RISK' ? 'bg-amber-950 text-amber-300 border-amber-800' : 'bg-gray-800 text-gray-400 border-gray-700'" x-text="item.event_risk.replaceAll('_', ' ')"></span>
+              <span class="text-[10px] text-gray-600" x-text="item.published_at"></span>
+            </div>
+            <div class="mt-1 text-xs text-gray-300" x-text="item.title"></div>
+            <div class="mt-1 text-[10px] text-gray-500" x-text="item.category + (item.risk_terms?.length ? ' ? matched: ' + item.risk_terms.join(', ') : '')"></div>
+          </article>
+        </template>
+      </div>
+    </div>
+  </div><!-- end news tab -->
+
+  <!-- Server-owned outcome analytics are deliberately labeled as candidates. -->
+  <div x-show="activeTab === 'analytics'" x-transition>
+    <div class="space-y-4">
+      <div class="bg-gray-900 rounded-xl border border-gray-800 p-4">
+        <div class="flex items-start justify-between gap-3 mb-4">
+          <div>
+            <h2 class="text-sm font-semibold text-gray-200">Candidate Outcome Analytics</h2>
+            <p class="text-[10px] text-amber-400 mt-1">Stored OI/price candidate outcomes only ? not validated options-strategy performance.</p>
+          </div>
+          <button @click="loadAnalytics()" class="text-xs text-gray-400 hover:text-white border border-gray-700 rounded px-2 py-1">Refresh</button>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 text-center">
+          <template x-for="metric in analyticsCards()" :key="metric.label">
+            <div class="bg-gray-950 border border-gray-800 rounded-lg p-3">
+              <div class="text-[10px] text-gray-500" x-text="metric.label"></div>
+              <div class="mono font-bold mt-1" :class="metric.cls" x-text="metric.value"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" x-show="analyticsBreakdowns">
+        <template x-for="kind in ['sector_accuracy', 'stock_accuracy']" :key="kind">
+          <div class="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+            <h3 class="px-4 py-3 text-xs font-semibold text-gray-300 border-b border-gray-800" x-text="kind === 'sector_accuracy' ? 'Sector candidate outcomes' : 'Stock candidate outcomes'"></h3>
+            <div class="max-h-80 overflow-y-auto scrollbar-thin">
+              <template x-for="item in breakdownRows(kind)" :key="item.name">
+                <div class="grid grid-cols-4 gap-2 px-4 py-2 border-b border-gray-800/60 text-[11px]">
+                  <span class="mono text-gray-300 truncate" x-text="item.name"></span>
+                  <span class="text-gray-500" x-text="item.events + ' events'"></span>
+                  <span class="text-amber-300" x-text="item.accuracy + '% hit' "></span>
+                  <span class="mono text-gray-400" x-text="item.pnl_points + ' pts'"></span>
+                </div>
+              </template>
+              <div x-show="breakdownRows(kind).length === 0" class="p-5 text-xs text-gray-600">No closed candidate outcomes yet.</div>
+            </div>
+          </div>
+        </template>
+      </div>
+      <div class="bg-gray-900 rounded-xl border border-gray-800 p-4 text-xs text-gray-400 leading-relaxed">
+        Results are saved as a scan-time audit trail. The application does not know instrument selection, fill price, slippage, brokerage, position sizing, or whether an option contract was tradeable. Do not treat the figures as realised P&amp;L.
+      </div>
+    </div>
+  </div><!-- end analytics tab -->
+
+  <!-- ??????????????????????????????????? TRADE HISTORY TAB ????????????????? -->
   <div x-show="activeTab === 'trades'" x-transition>
     <div class="space-y-4">
 
       <!-- Header bar -->
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 class="text-base font-bold text-white">📋 Today's Trade Log</h2>
+          <h2 class="text-base font-bold text-white">?? Today's Trade Log</h2>
           <p class="text-xs text-gray-500 mt-0.5"
              x-text="'Date: ' + todayLabel + '  ·  Daily history — resets at midnight IST'"></p>
         </div>
@@ -588,10 +787,10 @@
             </span>
           </div>
           <button @click="clearTrades()"
-                  x-show="trades.length > 0"
+                  x-show="trades.length > 0 && historySource !== 'server'"
                   class="text-xs text-red-400 hover:text-red-300 border border-red-900 hover:border-red-700
                          px-3 py-1.5 rounded transition">
-            🗑 Clear All
+            ?? Clear All
           </button>
         </div>
       </div>
@@ -599,7 +798,7 @@
       <!-- Trade cards -->
       <template x-if="trades.length === 0">
         <div class="bg-gray-900 border border-gray-800 rounded-xl py-16 text-center text-gray-600">
-          <div class="text-5xl mb-3 opacity-30">📋</div>
+          <div class="text-5xl mb-3 opacity-30">??</div>
           <div class="text-sm">No trades added yet.</div>
           <div class="text-xs mt-1">Go to <button @click="activeTab='signals'" class="text-brand underline">Signals</button> and click "+ Trade" on any signal.</div>
         </div>
@@ -630,7 +829,7 @@
                 <!-- Direction -->
                 <span class="badge"
                       :class="t.direction==='BUY' ? 'bg-blue-950 text-blue-300 border-blue-800' : 'bg-orange-950 text-orange-300 border-orange-800'"
-                      x-text="t.direction === 'BUY' ? '↑ BUY' : '↓ SELL'"></span>
+                      x-text="t.direction === 'BUY' ? '? BUY' : '? SELL'"></span>
               </div>
               <!-- Status badge -->
               <div class="flex items-center gap-1.5">
@@ -642,10 +841,10 @@
                         'bg-red-950 text-red-300 border-red-800':        t.status==='SL_HIT',
                         'bg-gray-800 text-gray-500 border-gray-700':     t.status==='EXPIRED',
                       }">
-                  <span x-text="{OPEN:'● OPEN', TG1_HIT:'✓ TG1 Hit', TG2_HIT:'✓✓ TG2 Hit', SL_HIT:'✗ SL Hit', EXPIRED:'— Expired'}[t.status]"></span>
+                  <span x-text="{OPEN:'? OPEN', TG1_HIT:'? TG1 Hit', TG2_HIT:'?? TG2 Hit', SL_HIT:'? SL Hit', EXPIRED:'? Expired'}[t.status]"></span>
                 </span>
-                <button @click="removeTrade(t.id)"
-                        class="text-gray-600 hover:text-red-400 transition text-xs ml-1">✕</button>
+                <button x-show="historySource !== 'server'" @click="removeTrade(t.id)"
+                        class="text-gray-600 hover:text-red-400 transition text-xs ml-1">?</button>
               </div>
             </div>
 
@@ -654,16 +853,16 @@
               <!-- Entry -->
               <div class="bg-gray-900 px-2 py-2.5">
                 <div class="text-[9px] text-gray-600 mb-0.5 uppercase tracking-wider">Entry</div>
-                <div class="mono text-xs font-bold lv-entry" x-text="'₹' + fmt2(t.entry)"></div>
+                <div class="mono text-xs font-bold lv-entry" x-text="'?' + fmt2(t.entry)"></div>
               </div>
               <!-- TG1 -->
               <div class="bg-gray-900 px-2 py-2.5"
                    :class="t.status==='TG1_HIT'||t.status==='TG2_HIT' ? 'bg-green-950/30' : ''">
                 <div class="text-[9px] text-gray-600 mb-0.5 uppercase tracking-wider flex items-center justify-center gap-1">
                   TG 1
-                  <span x-show="t.status==='TG1_HIT'||t.status==='TG2_HIT'" class="text-green-500">✓</span>
+                  <span x-show="t.status==='TG1_HIT'||t.status==='TG2_HIT'" class="text-green-500">?</span>
                 </div>
-                <div class="mono text-xs lv-tg1 font-semibold" x-text="'₹' + fmt2(t.tg1)"></div>
+                <div class="mono text-xs lv-tg1 font-semibold" x-text="'?' + fmt2(t.tg1)"></div>
                 <div class="text-[9px] text-green-700" x-text="t.tg1Pct + '%'"></div>
               </div>
               <!-- TG2 -->
@@ -671,9 +870,9 @@
                    :class="t.status==='TG2_HIT' ? 'bg-green-950/30' : ''">
                 <div class="text-[9px] text-gray-600 mb-0.5 uppercase tracking-wider flex items-center justify-center gap-1">
                   TG 2
-                  <span x-show="t.status==='TG2_HIT'" class="text-green-500">✓</span>
+                  <span x-show="t.status==='TG2_HIT'" class="text-green-500">?</span>
                 </div>
-                <div class="mono text-xs lv-tg2 font-semibold" x-text="'₹' + fmt2(t.tg2)"></div>
+                <div class="mono text-xs lv-tg2 font-semibold" x-text="'?' + fmt2(t.tg2)"></div>
                 <div class="text-[9px] text-green-700" x-text="t.tg2Pct + '%'"></div>
               </div>
               <!-- SL -->
@@ -681,9 +880,9 @@
                    :class="t.status==='SL_HIT' ? 'bg-red-950/30' : ''">
                 <div class="text-[9px] text-gray-600 mb-0.5 uppercase tracking-wider flex items-center justify-center gap-1">
                   SL
-                  <span x-show="t.status==='SL_HIT'" class="text-red-400">✗</span>
+                  <span x-show="t.status==='SL_HIT'" class="text-red-400">?</span>
                 </div>
-                <div class="mono text-xs lv-sl font-semibold" x-text="'₹' + fmt2(t.sl)"></div>
+                <div class="mono text-xs lv-sl font-semibold" x-text="'?' + fmt2(t.sl)"></div>
                 <div class="text-[9px] text-red-700" x-text="t.slPct + '%'"></div>
               </div>
             </div>
@@ -697,12 +896,12 @@
                           :class="t.direction==='BUY'
                             ? (t.currentLTP >= t.entry ? 'text-green-400' : 'text-red-400')
                             : (t.currentLTP <= t.entry ? 'text-green-400' : 'text-red-400')"
-                          x-text="'₹' + fmt2(t.currentLTP)"></b>
+                          x-text="'?' + fmt2(t.currentLTP)"></b>
                 </span>
               </div>
 
               <!-- Manual status override buttons -->
-              <div class="flex items-center gap-1">
+              <div x-show="historySource !== 'server'" class="flex items-center gap-1">
                 <span class="text-[10px] text-gray-700">Mark:</span>
                 <button @click="markTrade(t.id, 'TG1_HIT')"
                         :disabled="t.status !== 'OPEN'"
@@ -765,67 +964,70 @@
     </div>
   </div><!-- end trades tab -->
 
-  <!-- ═══════════════════════════════════ GUIDE TAB ═════════════════════════ -->
+  <!-- ??????????????????????????????????? GUIDE TAB ????????????????????????? -->
   <div x-show="activeTab === 'guide'" x-transition>
+    <div class="mb-4 bg-amber-950/40 border border-amber-800 rounded-xl p-4 text-xs text-amber-200">
+      These labels describe observed price/OI relationships. They are not buy, sell, or options-entry instructions. The dashboard keeps all candidates as <b>NO TRADE</b> until independent, auditable validation is available.
+    </div>
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
       <div class="bg-green-950/40 border border-green-900 rounded-xl p-5">
-        <div class="flex items-center gap-2 mb-3"><span class="text-2xl">🟢</span><span class="text-sm font-bold text-green-300">Long Buildup</span></div>
-        <div class="text-xs text-gray-300 font-semibold mb-1">Price ↑ + OI ↑ → BUY</div>
-        <div class="text-xs text-gray-400 leading-relaxed mb-3">Fresh longs being added. Strong uptrend. Institutions accumulating.</div>
+        <div class="flex items-center gap-2 mb-3"><span class="text-2xl">??</span><span class="text-sm font-bold text-green-300">Long Buildup</span></div>
+        <div class="text-xs text-gray-300 font-semibold mb-1">Price ? + OI ? ? BUY</div>
+        <div class="text-xs text-gray-400 leading-relaxed mb-3">Price and futures OI rose together. This is an observation, not proof of institutional activity or a trade.</div>
         <div class="space-y-1 text-xs mono">
           <div>Entry: <span class="lv-entry">LTP</span></div>
           <div>TG1: <span class="lv-tg1">+0.5%</span>  TG2: <span class="lv-tg2">+1.0%</span></div>
-          <div>SL: <span class="lv-sl">−0.3%</span></div>
+          <div>SL: <span class="lv-sl">?0.3%</span></div>
         </div>
       </div>
       <div class="bg-red-950/40 border border-red-900 rounded-xl p-5">
-        <div class="flex items-center gap-2 mb-3"><span class="text-2xl">🔴</span><span class="text-sm font-bold text-red-300">Short Buildup</span></div>
-        <div class="text-xs text-gray-300 font-semibold mb-1">Price ↓ + OI ↑ → SELL</div>
-        <div class="text-xs text-gray-400 leading-relaxed mb-3">Fresh shorts added. Bears confident. Confirmed downtrend.</div>
+        <div class="flex items-center gap-2 mb-3"><span class="text-2xl">??</span><span class="text-sm font-bold text-red-300">Short Buildup</span></div>
+        <div class="text-xs text-gray-300 font-semibold mb-1">Price ? + OI ? ? SELL</div>
+        <div class="text-xs text-gray-400 leading-relaxed mb-3">Price fell while futures OI rose. This is an observation, not a confirmed trend or a short instruction.</div>
         <div class="space-y-1 text-xs mono">
           <div>Entry: <span class="lv-entry">LTP</span></div>
-          <div>TG1: <span class="lv-tg1">−0.5%</span>  TG2: <span class="lv-tg2">−1.0%</span></div>
+          <div>TG1: <span class="lv-tg1">?0.5%</span>  TG2: <span class="lv-tg2">?1.0%</span></div>
           <div>SL: <span class="lv-sl">+0.3%</span></div>
         </div>
       </div>
       <div class="bg-yellow-950/40 border border-yellow-900 rounded-xl p-5">
-        <div class="flex items-center gap-2 mb-3"><span class="text-2xl">🟡</span><span class="text-sm font-bold text-yellow-300">Short Covering</span></div>
-        <div class="text-xs text-gray-300 font-semibold mb-1">Price ↑ + OI ↓ → BUY (weak)</div>
-        <div class="text-xs text-gray-400 leading-relaxed mb-3">Shorts exiting, not fresh longs. Quick move, book fast.</div>
+        <div class="flex items-center gap-2 mb-3"><span class="text-2xl">??</span><span class="text-sm font-bold text-yellow-300">Short Covering</span></div>
+        <div class="text-xs text-gray-300 font-semibold mb-1">Price ? + OI ? ? BUY (weak)</div>
+        <div class="text-xs text-gray-400 leading-relaxed mb-3">Price rose while futures OI fell. It may reflect covering; it does not establish a durable direction.</div>
         <div class="space-y-1 text-xs mono">
           <div>Entry: <span class="lv-entry">LTP</span></div>
           <div>TG1: <span class="lv-tg1">+0.3%</span>  TG2: <span class="lv-tg2">+0.6%</span></div>
-          <div>SL: <span class="lv-sl">−0.2%</span></div>
+          <div>SL: <span class="lv-sl">?0.2%</span></div>
         </div>
       </div>
       <div class="bg-orange-950/40 border border-orange-900 rounded-xl p-5">
-        <div class="flex items-center gap-2 mb-3"><span class="text-2xl">🟠</span><span class="text-sm font-bold text-orange-300">Long Unwinding</span></div>
-        <div class="text-xs text-gray-300 font-semibold mb-1">Price ↓ + OI ↓ → SELL (weak)</div>
-        <div class="text-xs text-gray-400 leading-relaxed mb-3">Longs exiting, not fresh shorts. Weak fall, may reverse.</div>
+        <div class="flex items-center gap-2 mb-3"><span class="text-2xl">??</span><span class="text-sm font-bold text-orange-300">Long Unwinding</span></div>
+        <div class="text-xs text-gray-300 font-semibold mb-1">Price ? + OI ? ? SELL (weak)</div>
+        <div class="text-xs text-gray-400 leading-relaxed mb-3">Price and futures OI fell together. It does not reveal participant intent or an executable position.</div>
         <div class="space-y-1 text-xs mono">
           <div>Entry: <span class="lv-entry">LTP</span></div>
-          <div>TG1: <span class="lv-tg1">−0.3%</span>  TG2: <span class="lv-tg2">−0.6%</span></div>
+          <div>TG1: <span class="lv-tg1">?0.3%</span>  TG2: <span class="lv-tg2">?0.6%</span></div>
           <div>SL: <span class="lv-sl">+0.2%</span></div>
         </div>
       </div>
     </div>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
-        <h3 class="font-semibold text-gray-200 mb-3">📊 PCR Interpretation</h3>
+        <h3 class="font-semibold text-gray-200 mb-3">?? PCR Interpretation</h3>
         <div class="space-y-2 text-xs">
-          <div class="flex gap-3"><span class="w-20 text-green-400 font-semibold mono">PCR &gt; 1.3</span><span class="text-gray-400">Bullish — market likely heading up</span></div>
-          <div class="flex gap-3"><span class="w-20 text-yellow-400 font-semibold mono">PCR 0.8–1.3</span><span class="text-gray-400">Neutral — no clear bias</span></div>
-          <div class="flex gap-3"><span class="w-20 text-red-400 font-semibold mono">PCR &lt; 0.8</span><span class="text-gray-400">Bearish — market likely heading down</span></div>
+          <div class="flex gap-3"><span class="w-20 text-green-400 font-semibold mono">PCR &gt; 1.3</span><span class="text-gray-400">Bullish ? market likely heading up</span></div>
+          <div class="flex gap-3"><span class="w-20 text-yellow-400 font-semibold mono">PCR 0.8?1.3</span><span class="text-gray-400">Neutral ? no clear bias</span></div>
+          <div class="flex gap-3"><span class="w-20 text-red-400 font-semibold mono">PCR &lt; 0.8</span><span class="text-gray-400">Bearish ? market likely heading down</span></div>
         </div>
       </div>
       <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
-        <h3 class="font-semibold text-gray-200 mb-3">⏰ Best Scalping Windows (IST)</h3>
+        <h3 class="font-semibold text-gray-200 mb-3">? Best Scalping Windows (IST)</h3>
         <div class="space-y-1.5 text-xs text-gray-400">
-          <div>🌅 <span class="text-yellow-400 font-medium">09:15–09:30</span> — Wait, watch gap direction</div>
-          <div>🔥 <span class="text-green-400 font-medium">09:30–10:30</span> — Morning momentum. Best OI signals</div>
-          <div>😴 <span class="text-gray-600 font-medium">10:30–13:00</span> — Low volatility, skip</div>
-          <div>🔥 <span class="text-orange-400 font-medium">13:00–14:30</span> — Afternoon trend continuation</div>
-          <div>⚡ <span class="text-red-400 font-medium">14:30–15:30</span> — Expiry pressure, sharp moves</div>
+          <div>?? <span class="text-yellow-400 font-medium">09:15?09:30</span> ? Wait, watch gap direction</div>
+          <div>?? <span class="text-green-400 font-medium">09:30?10:30</span> ? Morning momentum. Best OI signals</div>
+          <div>?? <span class="text-gray-600 font-medium">10:30?13:00</span> ? Low volatility, skip</div>
+          <div>?? <span class="text-orange-400 font-medium">13:00?14:30</span> ? Afternoon trend continuation</div>
+          <div>? <span class="text-red-400 font-medium">14:30?15:30</span> ? Expiry pressure, sharp moves</div>
         </div>
       </div>
     </div>
@@ -834,12 +1036,12 @@
 </main>
 
 <footer class="text-center text-xs text-gray-800 py-5 mt-4 border-t border-gray-900">
-  NSE F&O OI Scanner · Educational use only · Not financial advice ·
+  NSE F&O OI Scanner ? Educational use only ? Not financial advice ?
   <a href="https://github.com/Sabari-2004/nse-oi-tracker" target="_blank"
      class="hover:text-gray-500 underline">Sabari-2004 / nse-oi-tracker</a>
 </footer>
 
-<!-- ═══════════════════════════════════ ALPINE APP ════════════════════════════ -->
+<!-- ??????????????????????????????????? ALPINE APP ???????????????????????????? -->
 <script>
 const STORAGE_KEY  = 'nse_oi_trades';
 const STORAGE_DATE = 'nse_oi_trade_date';
@@ -854,38 +1056,42 @@ const SIGNAL_PARAMS = {
 
 function scanner() {
   return {
-    /* ── state ── */
-    signals: [], totalActive: 0, signalCounts: {}, highConf: 0, mediumConf: 0,
-    chainData: null, selectedSymbol: '', chainInput: '',
+    /* ?? state ?? */
+    signals: [], totalActive: 0, signalCounts: {}, highConf: 0, mediumConf: 0, availableSectors: [],
+    marketOverview: null, marketOverviewError: '',
+    news: [], newsSymbol: '', newsLoading: false,
+    intelligence: null, intelligenceLoading: false, participantOI: null,
+    chainData: null, selectedSymbol: '', chainInput: '', heatmapData: null, heatmapSymbol: '', heatmapLoading: false,
     loading: false, chainLoading: false,
     error: '', countdown: 60,
     clock: '', marketOpen: false, marketStatusLabel: '',
-    activeFilter: '', confidenceFilter: '', activeTab: 'signals',
+    activeFilter: '', confidenceFilter: '', sectorFilter: '', activeTab: 'signals',
     search: '', sortBy: 'confidence',
-    trades: [], todayLabel: '',
+    trades: [], todayLabel: '', historySource: 'browser', historyPerformance: null, analyticsBreakdowns: null,
     oiChart: null,
 
-    /* ── signal type metadata ── */
+    /* ?? signal type metadata ?? */
     SIG_TYPES: [
-      { key:'LONG_BUILDUP',   label:'Long Buildup',   emoji:'🟢', hint:'Price ↑ OI ↑ · BUY',
+      { key:'LONG_BUILDUP',   label:'Long Buildup',   emoji:'??', hint:'Price ? OI ? ? observation',
         cardClass:'bg-gray-900 border-green-900',   tc:'text-green-400',
         ringClass:'ring-green-500', activeCls:'bg-green-950 text-green-300 border-green-700' },
-      { key:'SHORT_BUILDUP',  label:'Short Buildup',  emoji:'🔴', hint:'Price ↓ OI ↑ · SELL',
+      { key:'SHORT_BUILDUP',  label:'Short Buildup',  emoji:'??', hint:'Price ? OI ? ? observation',
         cardClass:'bg-gray-900 border-red-900',     tc:'text-red-400',
         ringClass:'ring-red-500',   activeCls:'bg-red-950 text-red-300 border-red-700' },
-      { key:'SHORT_COVERING', label:'Short Covering', emoji:'🟡', hint:'Price ↑ OI ↓ · BUY (weak)',
+      { key:'SHORT_COVERING', label:'Short Covering', emoji:'??', hint:'Price ? OI ? ? observation',
         cardClass:'bg-gray-900 border-yellow-900',  tc:'text-yellow-400',
         ringClass:'ring-yellow-500',activeCls:'bg-yellow-950 text-yellow-300 border-yellow-700' },
-      { key:'LONG_UNWINDING', label:'Long Unwinding', emoji:'🟠', hint:'Price ↓ OI ↓ · SELL (weak)',
+      { key:'LONG_UNWINDING', label:'Long Unwinding', emoji:'??', hint:'Price ? OI ? ? observation',
         cardClass:'bg-gray-900 border-orange-900',  tc:'text-orange-400',
         ringClass:'ring-orange-500',activeCls:'bg-orange-950 text-orange-300 border-orange-700' },
     ],
 
-    /* ── computed ── */
+    /* ?? computed ?? */
     get filtered() {
       let list = [...this.signals];
       if (this.activeFilter)     list = list.filter(r => r.signal === this.activeFilter);
       if (this.confidenceFilter) list = list.filter(r => r.confidence_tier === this.confidenceFilter);
+      if (this.sectorFilter)     list = list.filter(r => (r.sector || 'Unclassified') === this.sectorFilter);
       if (this.search) { const q = this.search.toUpperCase(); list = list.filter(r => r.symbol.includes(q)); }
       if (this.sortBy === 'symbol') list.sort((a,b) => a.symbol.localeCompare(b.symbol));
       else list.sort((a,b) => (b[this.sortBy]??0) - (a[this.sortBy]??0));
@@ -893,6 +1099,16 @@ function scanner() {
     },
 
     get tradeStats() {
+      if (this.historySource === 'server' && this.historyPerformance) {
+        return {
+          tg1Hit: this.historyPerformance.tp1_hits || 0,
+          tg2Hit: this.historyPerformance.tp2_hits || 0,
+          slHit: this.historyPerformance.sl_hits || 0,
+          open: this.historyPerformance.open || 0,
+          tgHit: this.historyPerformance.tp1_hits || 0,
+          winRate: this.historyPerformance.accuracy || 0,
+        };
+      }
       const tg1Hit = this.trades.filter(t => t.status === 'TG1_HIT').length;
       const tg2Hit = this.trades.filter(t => t.status === 'TG2_HIT').length;
       const slHit  = this.trades.filter(t => t.status === 'SL_HIT').length;
@@ -906,7 +1122,29 @@ function scanner() {
       };
     },
 
-    /* ── lifecycle ── */
+    /* ?? lifecycle ?? */
+    analyticsCards() {
+      const data = this.historyPerformance || {};
+      return [
+        {label:'Candidates', value:data.signals_generated ?? 0, cls:'text-gray-200'},
+        {label:'TP1 observed', value:data.tp1_hits ?? 0, cls:'text-green-400'},
+        {label:'TP2 observed', value:data.tp2_hits ?? 0, cls:'text-emerald-400'},
+        {label:'Stops observed', value:data.sl_hits ?? 0, cls:'text-red-400'},
+        {label:'Open / partial', value:data.open ?? 0, cls:'text-blue-300'},
+        {label:'Candidate hit rate', value:(data.accuracy ?? 0) + '%', cls:'text-amber-300'},
+      ];
+    },
+
+    breakdownRows(kind) {
+      return Object.entries(this.analyticsBreakdowns?.[kind] || {})
+        .map(([name, value]) => ({name, ...value}))
+        .sort((a, b) => b.events - a.events || a.name.localeCompare(b.name));
+    },
+
+    objectRows(record) {
+      return Object.entries(record || {}).map(([name, value]) => ({name, value}));
+    },
+
     async boot() {
       this.todayLabel = new Date().toLocaleDateString('en-IN', { weekday:'long', year:'numeric', month:'short', day:'numeric' });
       this.loadTrades();
@@ -914,20 +1152,25 @@ function scanner() {
       this.tickClock();
       setInterval(() => this.tickClock(), 1000);
       await this.fetchSignals();
+      await this.fetchMarketOverview();
+      await this.fetchNews();
+      await this.fetchIntelligence();
+      await this.fetchParticipantOI();
+      await this.loadServerHistory();
+      await this.loadAnalytics();
       this.startTimer();
     },
 
-    /* ── clock ── */
+    /* ?? clock ?? */
     tickClock() {
       const now = new Date();
       this.clock = now.toLocaleTimeString('en-IN', {timeZone:'Asia/Kolkata', hour:'2-digit', minute:'2-digit', second:'2-digit'}) + ' IST';
       this.ensureTradeDay();
-      const ist  = new Date(now.toLocaleString('en-US', {timeZone:'Asia/Kolkata'}));
-      const h = ist.getHours(), m = ist.getMinutes(), d = ist.getDay();
-      this.marketOpen = d >= 1 && d <= 5 && ((h > 9)||(h===9&&m>=15)) && ((h < 15)||(h===15&&m<=30));
+      // Market status is API-owned: the server includes NSE holidays and
+      // unknown-year safeguards that a weekday/time-only browser test cannot.
     },
 
-    /* ── countdown + refresh ── */
+    /* ?? countdown + refresh ?? */
     startTimer() {
       this.countdown = 60;
       const t = setInterval(() => {
@@ -935,9 +1178,81 @@ function scanner() {
       }, 1000);
     },
 
-    async forceRefresh() { this.countdown = 60; await this.fetchSignals(true); },
+    async forceRefresh() {
+      this.countdown = 60;
+      await Promise.all([this.fetchSignals(true), this.fetchMarketOverview(true)]);
+    },
 
-    /* ── fetch signals ── */
+    async fetchMarketOverview(force=false) {
+      this.marketOverviewError = '';
+      try {
+        const r = await fetch('/api/market-overview' + (force ? '?refresh=true' : ''));
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.marketOverview = await r.json();
+      } catch (e) {
+        this.marketOverviewError = 'NSE market context unavailable: ' + e.message;
+      }
+    },
+
+    /* ?? fetch signals ?? */
+    async fetchNews(refresh=false) {
+      this.newsLoading = true;
+      try {
+        const symbol = this.newsSymbol.trim().toUpperCase();
+        const query = new URLSearchParams({limit: '100'});
+        if (symbol) query.set('symbol', symbol);
+        if (refresh) query.set('refresh', 'true');
+        const r = await fetch('/api/news?' + query.toString());
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        this.news = data.announcements || [];
+      } catch (e) {
+        this.error = 'NSE disclosure feed unavailable: ' + e.message;
+      } finally {
+        this.newsLoading = false;
+      }
+    },
+
+    async fetchIntelligence() {
+      this.intelligenceLoading = true;
+      try {
+        const r = await fetch('/api/market-intelligence');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.intelligence = await r.json();
+      } catch (e) {
+        this.error = 'Market intelligence unavailable: ' + e.message;
+      } finally {
+        this.intelligenceLoading = false;
+      }
+    },
+
+    async fetchParticipantOI(refresh=false) {
+      try {
+        const r = await fetch('/api/participant-oi' + (refresh ? '?refresh=true' : ''));
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.participantOI = await r.json();
+      } catch (e) {
+        console.warn('Participant OI unavailable', e);
+      }
+    },
+
+    async loadHeatmap(symbol, refresh=false) {
+      symbol = (symbol || '').toUpperCase().trim();
+      if (!symbol) return;
+      this.heatmapSymbol = symbol;
+      this.heatmapLoading = true;
+      this.heatmapData = null;
+      try {
+        const r = await fetch('/api/option-chain/' + encodeURIComponent(symbol) + '/heatmap' + (refresh ? '?refresh=true' : ''));
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        this.heatmapData = await r.json();
+      } catch (e) {
+        this.heatmapData = {symbol, error: 'Chain heatmap unavailable: ' + e.message, strikes: []};
+      } finally {
+        this.heatmapLoading = false;
+      }
+    },
+
     async fetchSignals(force=false) {
       this.loading = true; this.error = '';
       try {
@@ -949,16 +1264,48 @@ function scanner() {
         this.signalCounts = d.signal_counts || {};
         this.highConf     = d.high_confidence || 0;
         this.mediumConf   = d.medium_confidence || 0;
+        this.availableSectors = d.available_sectors || this.availableSectors;
         this.marketOpen   = d.market_open ?? this.marketOpen;
         this.marketStatusLabel = d.market_status_label || '';
         this.autoSaveSignals(this.signals);
-        this.updateTradesCMP();
+        await this.loadServerHistory();
       } catch(e) {
         this.error = 'NSE fetch failed: ' + e.message + '. Auto-retry in 60s.';
       } finally { this.loading = false; }
     },
 
-    /* ── option chain ── */
+    /* ?????? server-owned history ?????? */
+    async loadServerHistory() {
+      try {
+        const r = await fetch('/api/history/today');
+        if (!r.ok) return;
+        const data = await r.json();
+        // Keep a pre-existing browser log usable until the server has its
+        // first persisted scan. Once it has events, it is authoritative.
+        if ((data.total_events || 0) > 0) {
+          this.trades = data.events || [];
+          this.historyPerformance = data.performance || null;
+          this.historySource = 'server';
+          this.todayLabel = data.trade_date || this.todayLabel;
+        }
+      } catch (e) {
+        console.warn('Server history unavailable; using browser fallback', e);
+      }
+    },
+
+    /* ?? option chain ?? */
+    async loadAnalytics() {
+      try {
+        const r = await fetch('/api/analytics/today');
+        if (!r.ok) return;
+        const data = await r.json();
+        this.historyPerformance = data.metrics || this.historyPerformance;
+        this.analyticsBreakdowns = data.breakdowns || null;
+      } catch (e) {
+        console.warn('Server analytics unavailable', e);
+      }
+    },
+
     async openChain(sym, refresh=false) {
       if (!sym || sym.trim() === '') return;
       sym = sym.toUpperCase().trim();
@@ -976,11 +1323,11 @@ function scanner() {
       try {
         const url = '/api/option-chain/' + sym + (refresh ? '?refresh=true' : '');
         const r   = await fetch(url);
-        // Always 200 now — error info is in the JSON body
+        // Always 200 now ? error info is in the JSON body
         const data = await r.json();
         this.chainData = data;
         if (data.error) {
-          // Error shown inline in the panel — not as a banner
+          // Error shown inline in the panel ? not as a banner
           console.warn('Chain error for', sym, ':', data.error);
         } else if (data.strikes && data.strikes.length > 0) {
           this.$nextTick(() => this.drawChart(data));
@@ -995,14 +1342,17 @@ function scanner() {
     chainStats() {
       if (!this.chainData) return [];
       const pcr = this.chainData.pcr ?? 0;
+      const levels = this.chainData.oi_levels || {};
       return [
         { label:'PCR',
           val: pcr,
           cls: pcr>1.3?'text-green-400':pcr<0.7?'text-red-400':'text-yellow-400',
-          sub: this.chainData.pcr_label || (pcr>1.3?'↑ Bullish':pcr<0.7?'↓ Bearish':'→ Neutral'),
+          sub: this.chainData.pcr_label || (pcr>1.3?'? Bullish':pcr<0.7?'? Bearish':'? Neutral'),
           subCls: pcr>1.2?'text-green-600':pcr<0.8?'text-red-600':'text-yellow-600' },
         { label:'ATM Spot', val: (this.chainData.atm_strike||0).toLocaleString('en-IN'), cls:'text-white', sub:'Current Spot', subCls:'text-gray-600' },
         { label:'Max Pain', val: (this.chainData.max_pain||0).toLocaleString('en-IN'), cls:'text-purple-400', sub:'Expiry magnet', subCls:'text-gray-600' },
+        { label:'PE OI Support', val: levels.pe_oi_support ? levels.pe_oi_support.toLocaleString('en-IN') : '?', cls:'text-green-400', sub:'Highest PE OI', subCls:'text-gray-600' },
+        { label:'CE OI Resistance', val: levels.ce_oi_resistance ? levels.ce_oi_resistance.toLocaleString('en-IN') : '?', cls:'text-red-400', sub:'Highest CE OI', subCls:'text-gray-600' },
       ];
     },
 
@@ -1031,12 +1381,12 @@ function scanner() {
       else if (oiPct < -0.5) { bear++; factors.push('CE OI addition'); }
 
       if (bull >= 2 && bear === 0) {
-        return { label:'↑ BULLISH', cls:'text-green-400', detail:`Toward ${pain.toLocaleString('en-IN')} max pain`, factors:factors.join(' + ') };
+        return { label:'? BULLISH', cls:'text-green-400', detail:`Toward ${pain.toLocaleString('en-IN')} max pain`, factors:factors.join(' + ') };
       }
       if (bear >= 2 && bull === 0) {
-        return { label:'↓ BEARISH', cls:'text-red-400', detail:`Toward ${pain.toLocaleString('en-IN')} max pain`, factors:factors.join(' + ') };
+        return { label:'? BEARISH', cls:'text-red-400', detail:`Toward ${pain.toLocaleString('en-IN')} max pain`, factors:factors.join(' + ') };
       }
-      return { label:'→ MIXED / RANGE', cls:'text-yellow-400', detail:'No aligned confirmation', factors:factors.length ? factors.join(' + ') : 'insufficient directional evidence' };
+      return { label:'? MIXED / RANGE', cls:'text-yellow-400', detail:'No aligned confirmation', factors:factors.length ? factors.join(' + ') : 'insufficient directional evidence' };
     },
 
     drawChart(data) {
@@ -1067,9 +1417,9 @@ function scanner() {
       });
     },
 
-    /* ══════════════════════════════════════
+    /* ??????????????????????????????????????
        TRADE HISTORY LOGIC
-    ══════════════════════════════════════ */
+    ?????????????????????????????????????? */
 
     /* Compute entry / TG1 / TG2 / SL for a signal row */
     levels(row) {
@@ -1107,7 +1457,7 @@ function scanner() {
       const p      = SIGNAL_PARAMS[row.signal] || { dir:'BUY', tg1p:0.5, tg2p:1.0, slp:0.3 };
       const lv     = this.levels(row);
       const dir    = p.dir;
-      const sign   = dir === 'BUY' ? '+' : '−';
+      const sign   = dir === 'BUY' ? '+' : '?';
 
       const trade = {
         id:               Date.now(),
@@ -1125,7 +1475,7 @@ function scanner() {
         sl:               lv.sl,
         tg1Pct:           sign + p.tg1p,
         tg2Pct:           sign + p.tg2p,
-        slPct:            (dir==='BUY'?'−':'+') + p.slp,
+        slPct:            (dir==='BUY'?'?':'+') + p.slp,
         status:           'OPEN',
         currentLTP:       row.ltp,
         addedAt:          new Date().toLocaleTimeString('en-IN', {timeZone:'Asia/Kolkata', hour:'2-digit', minute:'2-digit'}),
@@ -1174,7 +1524,7 @@ function scanner() {
       this.saveTrades();
     },
 
-    /* Browser-local persistence — one independent trade list per IST day. */
+    /* Browser-local persistence ? one independent trade list per IST day. */
     todayIST() {
       return new Date().toLocaleDateString('en-CA', {timeZone:'Asia/Kolkata'});
     },
@@ -1228,6 +1578,15 @@ function scanner() {
         };
         request.onsuccess = () => {
           const db = request.result;
+          const cleanupTx = db.transaction('daily', 'readwrite');
+          const cleanupStore = cleanupTx.objectStore('daily');
+          const cleanup = cleanupStore.openCursor();
+          cleanup.onsuccess = () => {
+            const cursor = cleanup.result;
+            if (!cursor) return;
+            if (cursor.key !== today) cursor.delete();
+            cursor.continue();
+          };
           const get = db.transaction('daily', 'readonly').objectStore('daily').get(today);
           get.onsuccess = () => {
             const saved = get.result;
@@ -1242,8 +1601,21 @@ function scanner() {
       } catch (err) { console.warn('IndexedDB trade recovery failed:', err); }
     },
 
+    clearOldBrowserHistory(today) {
+      try {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith(`${STORAGE_KEY}:`) && key !== `${STORAGE_KEY}:${today}`) {
+            localStorage.removeItem(key);
+          }
+        }
+        const marker = localStorage.getItem(STORAGE_DATE);
+        if (marker && marker !== today) localStorage.removeItem(STORAGE_KEY);
+      } catch (err) { console.warn('Old browser history cleanup failed:', err); }
+    },
     loadTrades() {
       const today = this.todayIST();
+      this.clearOldBrowserHistory(today);
       try {
         let daily = localStorage.getItem(`${STORAGE_KEY}:${today}`);
         // Migrate trades saved by the previous bundle only when its date marker
@@ -1263,13 +1635,17 @@ function scanner() {
       }
     },
 
-    /* ── helpers ── */
+    /* ?? helpers ?? */
     toggleFilter(key) { this.activeFilter = this.activeFilter === key ? '' : key; },
 
-    fmt2(v)  { return v ? Number(v).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}) : '—'; },
+    fmt2(v)  { return v ? Number(v).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}) : '?'; },
+
+    fmtCrore(v) {
+      return v == null ? 'unavailable' : ((v >= 0 ? '+' : '') + Number(v).toLocaleString('en-IN', {maximumFractionDigits:2}) + ' cr');
+    },
 
     fmtOI(v) {
-      if (v===null||v===undefined) return '—';
+      if (v===null||v===undefined) return '?';
       const n=Math.abs(v), s=v<0?'-':'';
       if (n>=1e7) return s+(n/1e7).toFixed(2)+'Cr';
       if (n>=1e5) return s+(n/1e5).toFixed(2)+'L';
