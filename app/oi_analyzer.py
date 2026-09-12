@@ -89,10 +89,10 @@ def detect_cas_jump(symbol: str, price_change_pct: float, time_ist, oi_change_pc
 
 
 def classify_signal(price_change_pct: float, oi_change_pct: float) -> str:
-    price_up = price_change_pct >  PRICE_CHANGE_THRESHOLD
-    price_dn = price_change_pct < -PRICE_CHANGE_THRESHOLD
-    oi_up    = oi_change_pct    >  OI_CHANGE_THRESHOLD
-    oi_dn    = oi_change_pct    < -OI_CHANGE_THRESHOLD
+    price_up = price_change_pct >= PRICE_CHANGE_THRESHOLD
+    price_dn = price_change_pct <= -PRICE_CHANGE_THRESHOLD
+    oi_up    = oi_change_pct    >= OI_CHANGE_THRESHOLD
+    oi_dn    = oi_change_pct    <= -OI_CHANGE_THRESHOLD
     if price_up and oi_up:  return SIGNAL_LONG_BUILDUP
     if price_dn and oi_up:  return SIGNAL_SHORT_BUILDUP
     if price_up and oi_dn:  return SIGNAL_SHORT_COVERING
@@ -475,6 +475,16 @@ def _parse_option_chain(data: dict, symbol: str) -> dict:
             "total_ce_oi": int(total_ce),
             "total_pe_oi": int(total_pe),
             "max_pain": max_pain,
+            "oi_levels": {
+                "pe_oi_support": max(
+                    pain_map,
+                    key=lambda strike: (pain_map[strike]["pe_oi"], -strike),
+                ) if pain_map else 0,
+                "ce_oi_resistance": max(
+                    pain_map,
+                    key=lambda strike: (pain_map[strike]["ce_oi"], -strike),
+                ) if pain_map else 0,
+            },
             "strikes": strikes_f,
         }
     except Exception as exc:

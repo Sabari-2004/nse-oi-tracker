@@ -14,3 +14,9 @@ def test_angel_client_is_read_only():
     public_methods = set(dir(AngelOneMarketData))
     forbidden = {"_".join((verb, "order")) for verb in ("place", "modify", "cancel")}
     assert not public_methods.intersection(forbidden)
+
+
+def test_nse_instrument_symbols_normalize_equity_suffix():
+    assert AngelOneMarketData._lookup_symbol("RELIANCE-EQ") == "RELIANCE"
+    assert AngelOneMarketData._lookup_symbol("RELIANCE") == "RELIANCE"
+    assert AngelOneMarketData._lookup_symbol("BANKNIFTY", exchange="NFO") == "BANKNIFTY"

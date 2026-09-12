@@ -48,7 +48,16 @@ class AngelOneMarketData:
         self._feed_token: str | None = None
         self._login_at = 0.0
         self._instruments: dict[tuple[str, str], AngelInstrument] = {}
+        self._last_quote_at = 0.0
         self._lock = RLock()
+
+    @staticmethod
+    def _lookup_symbol(symbol: str, *, exchange: str = "NSE") -> str:
+        """Normalize dashboard symbols to instrument-master lookup symbols."""
+        normalized = symbol.upper().strip()
+        if exchange.upper() == "NSE":
+            normalized = normalized.removesuffix("-EQ")
+        return normalized
 
     @classmethod
     def from_environment(cls) -> "AngelOneMarketData | None":
@@ -112,7 +121,8 @@ class AngelOneMarketData:
             result: dict[tuple[str, str], AngelInstrument] = {}
             for row in records:
                 exchange = str(row.get("exch_seg") or "").upper()
-                symbol = str(row.get("symbol") or "").upper()
+                raw_symbol = str(row.get("symbol") or "").upper()
+                symbol = self._lookup_symbol(raw_symbol, exchange=exchange)
                 token = str(row.get("token") or "")
                 if exchange and symbol and token:
                     result.setdefault((exchange, symbol), AngelInstrument(
@@ -126,7 +136,7 @@ class AngelOneMarketData:
             return result
 
     def instrument(self, symbol: str, *, exchange: str = "NSE") -> AngelInstrument | None:
-        symbol = symbol.upper().strip()
+        symbol = self._lookup_symbol(symbol, exchange=exchange)
         instruments = self._get_instruments()
         return instruments.get((exchange.upper(), symbol))
 
@@ -136,12 +146,20 @@ class AngelOneMarketData:
             return {}
         self._login()
         instruments = self._get_instruments()
-        tokens = [instruments[(exchange.upper(), symbol.upper().strip())].token
-                  for symbol in symbols
-                  if (exchange.upper(), symbol.upper().strip()) in instruments]
+        normalized_exchange = exchange.upper()
+        normalized_symbols = [self._lookup_symbol(symbol, exchange=normalized_exchange) for symbol in symbols]
+        tokens = [instruments[(normalized_exchange, symbol)].token
+                  for symbol in normalized_symbols
+                  if (normalized_exchange, symbol) in instruments]
         output: dict[str, dict] = {}
         for offset in range(0, len(tokens), 50):
             batch = tokens[offset:offset + 50]
+            # Angel One documents a maximum of 50 symbols and 1 quote request
+            # per second. Sleep only between batches so a single-batch scan is
+            # not delayed.
+            elapsed = time.monotonic() - self._last_quote_at
+            if elapsed < 1.0 and self._last_quote_at:
+                time.sleep(1.0 - elapsed)
             response = requests.post(
                 f"{BASE_URL}/rest/secure/angelbroking/market/v1/quote/",
                 headers=self._headers(),
@@ -152,6 +170,7 @@ class AngelOneMarketData:
             body = response.json()
             if not body.get("status"):
                 raise RuntimeError(f"Angel One quote request failed: {body.get('message', 'unknown error')}")
+            self._last_quote_at = time.monotonic()
             for row in (body.get("data") or {}).get("fetched", []) or []:
                 raw_symbol = str(row.get("tradingSymbol") or row.get("symbol") or "").upper()
                 symbol = raw_symbol.removesuffix("-EQ")
