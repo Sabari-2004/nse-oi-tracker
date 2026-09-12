@@ -2,7 +2,7 @@
 
 The scanner uses the public NSE live OI-spurts endpoint as its realtime source. Each polling cycle preserves NSE's own day-relative price and OI changes whenever those fields are present. A rolling price-delta fallback is used only when NSE omits a native price-change field, and the response is labelled accordingly.
 
-Signal noise is reduced with a 0.25% inclusive price threshold, a 1.00% inclusive OI threshold, a 50,000-contract minimum OI gate, and a 55-point medium-confidence floor. These are observation filters, not trade instructions.
+Signal detection keeps the 0.25% inclusive price threshold so the scanner does not miss an early directional move. OI classification requires a 3.00% inclusive change and 100,000 contracts. The live dashboard applies a separate quality gate: confidence must be at least 75/100 and absolute OI must be at least 100,000 contracts. Lower-confidence rows remain diagnostic but are not published as active signals. These are observation filters, not trade instructions.
 
 Risk levels use the latest stored NSE daily bhavcopy ATR14 when at least 15 valid daily bars are available. The plan uses 1 ATR for the stop, 1.5 ATR for the first target, and 3 ATR for the second target. New or insufficiently seeded symbols retain an explicit percentage fallback label so the dashboard cannot mistake fallback levels for volatility-derived levels.
 

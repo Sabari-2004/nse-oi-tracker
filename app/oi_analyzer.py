@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from app.config import (
     PRICE_CHANGE_THRESHOLD, OI_CHANGE_THRESHOLD,
     MIN_OI_ABSOLUTE, CONFIDENCE_HIGH, CONFIDENCE_MEDIUM,
+    PUBLISH_MIN_CONFIDENCE, PUBLISH_MIN_OI_ABSOLUTE,
     STRIKES_EACH_SIDE, INDICES,
 )
 from app.nse_fetcher import (
@@ -316,14 +317,12 @@ def scan_all_fno_realtime() -> list[dict]:
     This single endpoint returns OI + price data for ALL ~200 F&O underlyings.
     We classify all 4 signal types from the price + OI direction combination.
 
-    Returns HIGH + MEDIUM confidence signals, sorted by confidence (HIGH first).
-    LOW-confidence rows are computed (for /api/debug diagnostics) but dropped
-    here — they're the noise floor, not a signal.
+    Returns only high-confidence, liquid signals, sorted by confidence. Medium
+    and low-confidence rows are computed for diagnostics but deliberately
+    dropped from the live dashboard to avoid noisy signal spam.
 
-    NOTE: this used to silently drop everything below HIGH despite this exact
-    docstring claiming HIGH+MEDIUM were both returned — CONFIDENCE_MEDIUM was
-    dead code. That mismatch is fixed; if you change the filter here, update
-    this docstring in the same commit, not "later".
+    Quality policy: a row must meet the publish confidence and absolute-OI
+    gates. Directional classification alone is not enough to publish a signal.
     """
     rows = fetch_all_fno_oi_change()
     if rows and angel_one.configured:
@@ -349,7 +348,11 @@ def scan_all_fno_realtime() -> list[dict]:
 
     for row in rows:
         result = _parse_row(row)
-        if result is None or result["confidence_tier"] == "LOW":
+        if (
+            result is None
+            or result["confidence"] < PUBLISH_MIN_CONFIDENCE
+            or result["oi"] < PUBLISH_MIN_OI_ABSOLUTE
+        ):
             continue
         if result["symbol"] in seen:
             continue

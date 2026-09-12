@@ -26,7 +26,7 @@ def test_live_nse_field_names_produce_buy_signal():
         "latestOI": 8021474,
         "prevOI": 6099628,
         "changeInOI": 1921846,
-        "pChange": 0.25,
+        "pChange": 0.50,
         "change": 59.5,
     })
     assert result is not None
@@ -44,7 +44,7 @@ def test_live_nse_field_names_produce_sell_signal():
         "latestOI": 950000,
         "prevOI": 1000000,
         "changeInOI": -50000,
-        "pChange": -0.35,
+        "pChange": -0.50,
         "change": -180,
     })
     assert result is not None
@@ -53,18 +53,12 @@ def test_live_nse_field_names_produce_sell_signal():
     assert result["oi_change_pct"] < 0
 
 
-def test_scan_all_fno_realtime_returns_medium_tier_not_just_high(monkeypatch):
-    """
-    Regression test: scan_all_fno_realtime()'s own docstring always claimed
-    it returns HIGH + MEDIUM confidence signals, but the filter used to
-    require confidence_tier == "HIGH" exactly, silently discarding every
-    MEDIUM row. On calm trading days this produced zero signals even when
-    real (if less extreme) OI activity existed.
-    """
+def test_scan_all_fno_realtime_filters_medium_quality_noise(monkeypatch):
+    """Medium rows stay diagnostic and do not become dashboard signal spam."""
     import app.oi_analyzer as oi_analyzer
     oi_analyzer = importlib.reload(oi_analyzer)
 
-    # price 2.0% -> 28pts, oi 7% -> 22pts, oi_abs 100_000 -> 12pts = 62 => MEDIUM (60-74)
+    # price 2.0% -> 28pts, oi 7% -> 22pts, oi_abs 100_000 -> 12pts = 62 => MEDIUM
     medium_row = {
         "symbol": "MEDIUMCO", "underlyingValue": 500,
         "pChange": 2.0, "change": 10,
@@ -74,17 +68,14 @@ def test_scan_all_fno_realtime_returns_medium_tier_not_just_high(monkeypatch):
 
     results = oi_analyzer.scan_all_fno_realtime()
 
-    assert len(results) == 1
-    assert results[0]["symbol"] == "MEDIUMCO"
-    assert results[0]["confidence_tier"] == "MEDIUM"
+    assert results == []
 
 
-def test_modest_valid_signal_is_not_discarded_as_low(monkeypatch):
+def test_modest_directional_move_is_not_published(monkeypatch):
     import app.oi_analyzer as oi_analyzer
     oi_analyzer = importlib.reload(oi_analyzer)
 
-    # 0.25% price change and 30% OI change satisfy direction thresholds and
-    # should be visible as a MEDIUM signal rather than silently disappearing.
+    # A 0.25% move is routine noise for the live dashboard even with elevated OI.
     row = {
         "symbol": "MODESTCO", "underlyingValue": 500,
         "pChange": 0.25, "change": 1.25,
@@ -94,9 +85,29 @@ def test_modest_valid_signal_is_not_discarded_as_low(monkeypatch):
 
     results = oi_analyzer.scan_all_fno_realtime()
 
-    assert len(results) == 1
-    assert results[0]["symbol"] == "MODESTCO"
-    assert results[0]["confidence_tier"] == "MEDIUM"
+    assert results == []
+
+
+def test_quality_gate_requires_high_confidence_for_publication(monkeypatch):
+    import app.oi_analyzer as oi_analyzer
+    oi_analyzer = importlib.reload(oi_analyzer)
+    noisy = _parse_row({
+        "symbol": "NOISECO", "underlyingValue": 500,
+        "pChange": 0.49, "change": 2.45,
+        "oi": 200_000, "oiChange": 20_000, "oiChangePct": 10.0,
+    })
+    assert noisy is not None
+    assert noisy["confidence"] < 75
+    quality = _parse_row({
+        "symbol": "QUALITYCO", "underlyingValue": 500,
+        "pChange": 3.0, "change": 15.0,
+        "oi": 200_000, "oiChange": 20_000, "oiChangePct": 10.0,
+    })
+    assert quality["signal"] == SIGNAL_LONG_BUILDUP
+    monkeypatch.setattr(oi_analyzer, "fetch_all_fno_oi_change", lambda: [{}, {}])
+    parsed = iter([noisy, quality])
+    monkeypatch.setattr(oi_analyzer, "_parse_row", lambda row: next(parsed))
+    assert [row["symbol"] for row in oi_analyzer.scan_all_fno_realtime()] == ["QUALITYCO"]
 
 
 def test_high_score_signal_is_actionable_and_exposes_factor_audit():
@@ -118,6 +129,7 @@ def test_medium_score_signal_remains_no_trade_but_explains_missing_factors():
         "pChange": 0.25, "change": 1.25,
         "oi": 100_000, "oiChange": 23_000, "oiChangePct": 30.0,
     })
+    assert result is not None
     assert result["score"] < 75
     assert result["actionable"] is False
     assert result["trade_recommendation"] == "NO_TRADE"

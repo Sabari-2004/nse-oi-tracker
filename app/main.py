@@ -530,12 +530,15 @@ async def intraday_candles(symbol: str, interval: str = Query("FIVE_MINUTE")):
 async def oi_signals(
     refresh:      bool  = Query(False, description="Force fresh NSE fetch"),
     signal:       str   = Query("",    description="Filter by signal type"),
-    tier:         str   = Query("",    description="Filter by tier: HIGH | MEDIUM"),
+    tier:         str   = Query("",    description="Filter by tier: HIGH | MEDIUM (MEDIUM is diagnostic only)"),
     sector:       str   = Query("",    description="Curated display sector; unknown symbols are Unclassified"),
     min_strength: float = Query(0,     description="Min strength score"),
 ):
     """
-    Scan ALL NSE F&O stocks. Returns HIGH + MEDIUM confidence signals only.
+    Scan ALL NSE F&O stocks. Returns only high-confidence, liquid signals.
+
+    Medium and low-confidence classifications are retained for diagnostics but
+    are intentionally excluded from the live signal list to reduce noise.
 
     Data source: /api/live-analysis-oi-spurts-underlyings (confirmed working)
     Signal classification: price direction ? OI direction ? 4 signal types

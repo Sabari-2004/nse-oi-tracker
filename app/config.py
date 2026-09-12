@@ -12,13 +12,13 @@ INDICES = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
 
 # Minimum % price move to be "rising" or "falling"
 
-PRICE_CHANGE_THRESHOLD = 0.25    # 0.25% — filters ordinary tick noise
+PRICE_CHANGE_THRESHOLD = 0.25    # 0.25% — classify directional movement; publish gate is stricter
 
 
 
 # Minimum % OI change to be significant
 
-OI_CHANGE_THRESHOLD    = 1.00    # 1.00% — filters mechanical OI churn
+OI_CHANGE_THRESHOLD    = 3.00    # 3.00% — filter routine OI churn
 
 
 
@@ -29,7 +29,7 @@ OI_CHANGE_THRESHOLD    = 1.00    # 1.00% — filters mechanical OI churn
 # be discarded because the score awarded no points for modest price/OI moves.
 
 CONFIDENCE_HIGH   = 75   # ⭐⭐⭐⭐ — very high confidence
-CONFIDENCE_MEDIUM = 55   # ⭐⭐ — requires stronger independent evidence
+CONFIDENCE_MEDIUM = 65   # ⭐⭐ — diagnostic tier only; not published by default
 
 # Below MEDIUM → filtered out
 
@@ -39,7 +39,12 @@ CONFIDENCE_MEDIUM = 55   # ⭐⭐ — requires stronger independent evidence
 
 # Minimum absolute OI in contracts (removes penny/illiquid F&O stocks)
 
-MIN_OI_ABSOLUTE = 50_000
+MIN_OI_ABSOLUTE = 100_000
+
+# The live dashboard is intentionally selective. Rows below this score remain
+# available to diagnostics/backtests but are not presented as active signals.
+PUBLISH_MIN_CONFIDENCE = 75
+PUBLISH_MIN_OI_ABSOLUTE = 100_000
 
 
 
