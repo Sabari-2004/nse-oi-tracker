@@ -576,6 +576,11 @@ async def oi_signals(
     high   = sum(1 for r in cached if r.get("confidence_tier") == "HIGH")
     medium = sum(1 for r in cached if r.get("confidence_tier") == "MEDIUM")
     status = get_market_status()
+    active_source = (
+        "angel_one_read_only_overlay"
+        if any(r.get("realtime_source") == "angel_one_read_only" for r in cached)
+        else "nse_public_feed"
+    )
 
     return {
         "market_open":       status == MARKET_STATUS_OPEN,
@@ -589,6 +594,10 @@ async def oi_signals(
         "signal_meta":       SIGNAL_META,
         "available_sectors": known_sectors(),
         "signals":           results,
+        "primary_market_data_source": active_source,
+        "angel_one_configured": angel_market_data is not None,
+        "nse_public_feed_is_fallback": active_source == "nse_public_feed" and angel_market_data is not None,
+        "refresh_supported": True,
         "timestamp":         now_ist().strftime("%H:%M:%S"),
         "last_refresh_at_ist": _last_refresh_at_ist,
         "is_stale":          _last_refresh_was_stale,

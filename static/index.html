@@ -88,6 +88,10 @@
       <!-- IST clock -->
       <div class="mono text-xs text-gray-400 bg-gray-800 px-2.5 py-1 rounded-full" x-text="clock"></div>
 
+      <div x-show="marketDataSource"
+           class="text-[10px] bg-indigo-950 border border-indigo-800 text-indigo-300 px-2.5 py-1 rounded-full"
+           x-text="marketDataSource === 'angel_one_read_only_overlay' ? 'Angel One quotes' : 'NSE public feed'"></div>
+
       <!-- Active signals badge -->
       <div x-show="totalActive > 0"
            class="bg-blue-950 border border-blue-800 px-2.5 py-1 rounded-full text-xs">
@@ -1058,6 +1062,7 @@ function scanner() {
   return {
     /* ?? state ?? */
     signals: [], totalActive: 0, signalCounts: {}, highConf: 0, mediumConf: 0, availableSectors: [],
+    marketDataSource: '', newsRefreshTimer: null,
     marketOverview: null, marketOverviewError: '',
     news: [], newsSymbol: '', newsLoading: false,
     intelligence: null, intelligenceLoading: false, participantOI: null,
@@ -1158,6 +1163,7 @@ function scanner() {
       await this.fetchParticipantOI();
       await this.loadServerHistory();
       await this.loadAnalytics();
+      this.newsRefreshTimer = setInterval(() => this.fetchNews(true), 180000);
       this.startTimer();
     },
 
@@ -1180,7 +1186,11 @@ function scanner() {
 
     async forceRefresh() {
       this.countdown = 60;
-      await Promise.all([this.fetchSignals(true), this.fetchMarketOverview(true)]);
+      await Promise.all([
+        this.fetchSignals(true),
+        this.fetchMarketOverview(true),
+        this.fetchNews(true),
+      ]);
     },
 
     async fetchMarketOverview(force=false) {
@@ -1264,6 +1274,7 @@ function scanner() {
         this.signalCounts = d.signal_counts || {};
         this.highConf     = d.high_confidence || 0;
         this.mediumConf   = d.medium_confidence || 0;
+        this.marketDataSource = d.primary_market_data_source || '';
         this.availableSectors = d.available_sectors || this.availableSectors;
         this.marketOpen   = d.market_open ?? this.marketOpen;
         this.marketStatusLabel = d.market_status_label || '';
