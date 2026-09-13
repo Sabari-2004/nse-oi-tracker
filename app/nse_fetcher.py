@@ -486,7 +486,13 @@ def test_nse_connectivity() -> dict:
     for name, fn in tests:
         try:
             data = fn()
-            if data is None:
+            if data is None and name == "quote_deriv":
+                fallback_rows = fetch_all_fno_oi_change()
+                results[name] = (
+                    f"fallback ok via oi_spurts ({len(fallback_rows)} rows)"
+                    if fallback_rows else "blocked/empty"
+                )
+            elif data is None:
                 results[name] = "blocked/empty"
             elif isinstance(data, list):
                 results[name] = f"ok ({len(data)} rows)"

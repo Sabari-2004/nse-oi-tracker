@@ -37,6 +37,7 @@ from app.oi_analyzer import (
     CATEGORY_TO_SIGNAL,
     classify_signal,
     _build_signal_row,
+    _parse_row,
     _f,
     sample_field_usage,
 )
@@ -951,6 +952,21 @@ async def single_signal(symbol: str):
         match = next((s for s in all_signals if s["symbol"] == symbol), None)
         if match:
             return {"source": "scan_cache", **match}
+        # The legacy public derivative-quote endpoint can return 404 while the
+        # all-F&O OI-spurts feed is healthy. Reuse that same live feed instead
+        # of reporting a false total-data failure for the symbol.
+        try:
+            live_rows = await asyncio.to_thread(fetch_all_fno_oi_change)
+            raw_match = next(
+                (row for row in live_rows
+                 if str(row.get("symbol") or row.get("underlying") or "").upper().strip() == symbol),
+                None,
+            )
+            parsed = _parse_row(raw_match) if raw_match else None
+            if parsed:
+                return {"source": "nse_oi_spurts_fallback", **parsed}
+        except Exception:
+            logger.exception("OI-spurts fallback failed for %s", symbol)
         return JSONResponse(
             status_code=200,
             content={
