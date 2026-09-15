@@ -15,6 +15,9 @@
 import time
 import logging
 import random
+import os
+import sqlite3
+from pathlib import Path
 from collections import OrderedDict
 from threading import RLock
 from urllib.parse import quote
@@ -280,6 +283,19 @@ _NATIVE_PRICE_CHANGE_FIELDS = (
 )
 
 
+def _stored_previous_close(symbol: str) -> float | None:
+    """Read the latest prior NSE bhavcopy close when available."""
+    db = Path(os.getenv("NSE_OI_DATABASE", "nse_oi_tracker.sqlite3"))
+    if not db.is_absolute():
+        db = Path(os.getenv("NSE_OI_DATA_DIR", "data")) / db
+    try:
+        with sqlite3.connect(db) as con:
+            row = con.execute("SELECT close FROM daily_equity_bars WHERE symbol=? ORDER BY trade_date DESC LIMIT 1", (symbol,)).fetchone()
+        return float(row[0]) if row and float(row[0]) > 0 else None
+    except Exception:
+        return None
+
+
 def fetch_all_fno_oi_change() -> list[dict]:
     """
     Fetch OI + price data for ALL F&O underlyings.
@@ -320,15 +336,20 @@ def fetch_all_fno_oi_change() -> list[dict]:
                 row.get(field) not in (None, "", "-") for field in _NATIVE_PRICE_CHANGE_FIELDS
             )
             previous_price = _price_snapshots.get(symbol) if symbol else None
+            stored_close = _stored_previous_close(symbol) if symbol else None
 
             if symbol and current_price > 0:
                 if has_native_price_change:
                     enriched["price_source"] = "nse_native"
+                elif stored_close and stored_close > 0:
+                    enriched["change"] = current_price - stored_close
+                    enriched["pChange"] = ((current_price - stored_close) / stored_close) * 100
+                    enriched["price_source"] = "previous_close_day_relative"
                 elif previous_price and previous_price > 0:
                     enriched["ltp"] = current_price
                     enriched["change"] = current_price - previous_price
                     enriched["pChange"] = ((current_price - previous_price) / previous_price) * 100
-                    enriched["price_source"] = "rolling_underlying_snapshot_fallback"
+                    enriched["price_source"] = "rolling_minute_fallback"
                 _price_snapshots[symbol] = current_price
                 _price_snapshots.move_to_end(symbol)
                 while len(_price_snapshots) > MAX_PRICE_SNAPSHOTS:
@@ -455,17 +476,6 @@ def fetch_option_chain_equity(symbol: str) -> dict | None:
     return _fetch_option_chain(symbol, "Equity")
 
 
-def fetch_quote_derivative(symbol: str) -> dict | None:
-    encoded_symbol = quote(symbol.upper().strip(), safe="")
-    """Futures quote for a specific symbol ? live price, OI, expiry."""
-    return _nse.get_seeded(
-        seed_url     = f"{NSE_BASE}/get-quotes/derivatives?symbol={encoded_symbol}",
-        seed_referer = "https://www.nseindia.com/market-data/live-equity-market",
-        api_url      = f"{NSE_BASE}/api/quote-derivative?symbol={encoded_symbol}",
-        api_referer  = f"https://www.nseindia.com/get-quotes/derivatives?symbol={encoded_symbol}",
-    )
-
-
 def test_nse_connectivity() -> dict:
     """
     Diagnostic ? test all key endpoints. Accessible via /api/debug.
@@ -481,7 +491,6 @@ def test_nse_connectivity() -> dict:
         ("oi_spurts",    lambda: fetch_all_fno_oi_change()),
         ("chain_nifty",  lambda: fetch_option_chain_index("NIFTY")),
         ("chain_equity", lambda: fetch_option_chain_equity("RELIANCE")),
-        ("quote_deriv",  lambda: fetch_quote_derivative("RELIANCE")),
     ]
     for name, fn in tests:
         try:

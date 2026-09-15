@@ -9,39 +9,39 @@ import app.nse_fetcher as nse_fetcher
 
 
 def test_fetch_all_fno_oi_change_enriches_second_snapshot(monkeypatch):
-  
+
     module = importlib.reload(nse_fetcher)
-  
+
     payloads = iter([
-      
+
         {"data": [{"symbol": "ABC", "underlyingValue": "100", "oi": 1000}]},
-      
+
         {"data": [{"symbol": "ABC", "underlyingValue": "105", "oi": 1000}]},
-      
+
     ])
-  
+
     monkeypatch.setattr(module._nse, "get", lambda *args, **kwargs: next(payloads))
-  
+
 
 
     first = module.fetch_all_fno_oi_change()
-  
+
     second = module.fetch_all_fno_oi_change()
-  
+
 
 
     assert first[0]["symbol"] == "ABC"
-  
+
     assert "pChange" not in first[0]
-  
+
     assert second[0]["ltp"] == 105.0
-  
+
     assert second[0]["change"] == 5.0
-  
+
     assert second[0]["pChange"] == 5.0
-  
-    assert second[0]["price_source"] == "rolling_underlying_snapshot_fallback"
-  
+
+    assert second[0]["price_source"] == "rolling_minute_fallback"
+
 
 
 
@@ -76,23 +76,23 @@ def test_native_price_change_is_never_overwritten_by_rolling_snapshot(monkeypatc
 
 
 def test_fetch_all_fno_oi_change_preserves_rows_with_invalid_price(monkeypatch):
-  
+
     module = importlib.reload(nse_fetcher)
-  
+
     monkeypatch.setattr(
-      
+
         module._nse,
-      
+
         "get",
-      
+
         lambda *args, **kwargs: {"data": [{"symbol": "ABC", "underlyingValue": "not-a-number"}]},
-      
+
     )
-  
+
 
 
     rows = module.fetch_all_fno_oi_change()
-  
+
 
 
     assert rows == [{"symbol": "ABC", "underlyingValue": "not-a-number"}]
@@ -110,43 +110,6 @@ def test_absolute_price_change_does_not_mask_percent_change_fallback(monkeypatch
     second = module.fetch_all_fno_oi_change()
 
     assert second[0]["pChange"] == 2.0
-    assert second[0]["price_source"] == "rolling_underlying_snapshot_fallback"
-
-
-def test_derivative_symbol_is_url_encoded(monkeypatch):
-    module = importlib.reload(nse_fetcher)
-    seen = {}
-
-    def seeded(**kwargs):
-        seen.update(kwargs)
-        return {"stocks": []}
-
-    monkeypatch.setattr(module._nse, "get_seeded", seeded)
-    module.fetch_quote_derivative("A&B")
-
-    assert "A%26B" in seen["api_url"]
-  
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    assert second[0]["price_source"] == "rolling_minute_fallback"
 
 

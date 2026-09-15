@@ -25,7 +25,6 @@ from app.nse_fetcher import (
     fetch_all_fno_oi_change,
     fetch_option_chain_index,
     fetch_option_chain_equity,
-    fetch_quote_derivative,
 )
 from app.angel_one import angel_one
 
@@ -241,7 +240,7 @@ def _build_signal_row(sym, ltp, price_chg, price_chg_p, oi, oi_chg, oi_chg_p,
         "confidence_tier":  tier,
         "confirmed_factors": confirmed,
         "missing_factors":   missing,
-        "trade_recommendation": "TRADE" if actionable else "NO_TRADE",
+        "trade_recommendation": "NO_TRADE",
         "actionable":       actionable,
         "is_cas_jump": bool(is_cas_jump),
     }

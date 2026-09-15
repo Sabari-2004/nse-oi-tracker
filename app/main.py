@@ -47,7 +47,6 @@ from app.nse_fetcher import (
     fetch_fii_dii_activity,
     fetch_corporate_announcements,
     fetch_market_indices,
-    fetch_quote_derivative,
     test_nse_connectivity,
 )
 from analytics.technical import technical_context
@@ -945,8 +944,7 @@ async def option_chain_heatmap(symbol: str, refresh: bool = Query(False)):
 async def single_signal(symbol: str):
     """
     On-demand signal for any specific F&O symbol.
-    Uses quote-derivative endpoint for live futures data.
-    Returns graceful response if symbol not found or NSE unavailable.
+    Uses the live OI-spurts scan and its cached fallback; the removed NSE quote-derivative endpoint is never called.
     """
     symbol    = symbol.upper().strip()
     cache_key = f"sig:{symbol}"
@@ -955,8 +953,7 @@ async def single_signal(symbol: str):
     if cached:
         return {"source": "cache", **cached}
 
-    raw = await asyncio.to_thread(fetch_quote_derivative, symbol)
-
+    raw = None  # Removed NSE quote-derivative endpoint; use scan fallback.
     if not raw:
         # Fallback: check if symbol is in the current scan cache
         all_signals = cache.get("all_signals") or []

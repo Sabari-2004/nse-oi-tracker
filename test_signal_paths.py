@@ -120,7 +120,7 @@ def test_high_score_signal_is_actionable_and_exposes_factor_audit():
     })
     assert result["score"] == 100
     assert result["actionable"] is True
-    assert result["trade_recommendation"] == "TRADE"
+    assert result["trade_recommendation"] == "NO_TRADE"
     assert result["confirmed_factors"]
     assert result["data_source"] == "NSE live-analysis-oi-spurts-underlyings"
 

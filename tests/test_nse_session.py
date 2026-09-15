@@ -64,6 +64,4 @@ def test_public_fetchers_use_seeded_option_chain_and_derivative_paths(monkeypatc
     monkeypatch.setattr(nse_fetcher._nse, "get_seeded", get_seeded)
 
     assert nse_fetcher.fetch_option_chain_index("NIFTY") == {"data": []}
-    assert nse_fetcher.fetch_quote_derivative("A&B") == {"data": []}
     assert seen[0][0] == "get"
-    assert any(item[0] == "seeded" and "symbol=A%26B" in item[1]["api_url"] for item in seen)
