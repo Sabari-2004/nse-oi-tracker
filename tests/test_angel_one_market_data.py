@@ -20,3 +20,21 @@ def test_nse_instrument_symbols_normalize_equity_suffix():
     assert AngelOneMarketData._lookup_symbol("RELIANCE-EQ") == "RELIANCE"
     assert AngelOneMarketData._lookup_symbol("RELIANCE") == "RELIANCE"
     assert AngelOneMarketData._lookup_symbol("BANKNIFTY", exchange="NFO") == "BANKNIFTY"
+
+
+def test_render_angel_variable_aliases_configure_read_only_client(monkeypatch):
+    monkeypatch.setenv("ANGEL_API_KEY", "key")
+    monkeypatch.setenv("ANGEL_CLIENT_ID", "client")
+    monkeypatch.setenv("ANGEL_PASSWORD", "password")
+    monkeypatch.setenv("ANGEL_TOTP_SECRET", "totp")
+    monkeypatch.delenv("ANGEL_ONE_API_KEY", raising=False)
+    monkeypatch.delenv("ANGEL_ONE_CLIENT_CODE", raising=False)
+    monkeypatch.delenv("ANGEL_ONE_PASSWORD", raising=False)
+    monkeypatch.delenv("ANGEL_ONE_TOTP_SECRET", raising=False)
+
+    client = AngelOneMarketData.from_environment()
+
+    assert client is not None
+    assert client.configured is True
+    assert client.client_code == "client"
+    assert not {"place_order", "modify_order", "cancel_order"}.intersection(dir(client))

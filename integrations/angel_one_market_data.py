@@ -61,11 +61,14 @@ class AngelOneMarketData:
 
     @classmethod
     def from_environment(cls) -> "AngelOneMarketData | None":
+        # Accept the names already used by the Render service as well as the
+        # documented ANGEL_ONE_* names. This is read-only market data; no
+        # order-placement API exists in this integration.
         values = {
-            "api_key": os.getenv("ANGEL_ONE_API_KEY", "").strip(),
-            "client_code": os.getenv("ANGEL_ONE_CLIENT_CODE", "").strip(),
-            "password": os.getenv("ANGEL_ONE_PASSWORD", "").strip(),
-            "totp_secret": os.getenv("ANGEL_ONE_TOTP_SECRET", "").strip(),
+            "api_key": (os.getenv("ANGEL_ONE_API_KEY") or os.getenv("ANGEL_API_KEY") or "").strip(),
+            "client_code": (os.getenv("ANGEL_ONE_CLIENT_CODE") or os.getenv("ANGEL_CLIENT_ID") or os.getenv("ANGEL_CLIENT_CODE") or "").strip(),
+            "password": (os.getenv("ANGEL_ONE_PASSWORD") or os.getenv("ANGEL_PASSWORD") or os.getenv("ANGEL_PIN") or "").strip(),
+            "totp_secret": (os.getenv("ANGEL_ONE_TOTP_SECRET") or os.getenv("ANGEL_TOTP_SECRET") or "").strip(),
         }
         if not all(values.values()):
             return None
