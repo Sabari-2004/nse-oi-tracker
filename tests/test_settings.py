@@ -19,3 +19,11 @@ def test_cors_parses_explicit_origins_only(monkeypatch, tmp_path):
         "https://one.example",
         "https://two.example",
     )
+
+
+def test_startup_backfill_defaults_on_and_can_be_disabled(monkeypatch, tmp_path):
+    monkeypatch.setenv("NSE_OI_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("NSE_OI_STARTUP_BACKFILL", raising=False)
+    assert Settings.from_environment().startup_backfill is True
+    monkeypatch.setenv("NSE_OI_STARTUP_BACKFILL", "0")
+    assert Settings.from_environment().startup_backfill is False

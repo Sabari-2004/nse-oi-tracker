@@ -42,6 +42,15 @@ def _optional_secret(name: str) -> str | None:
     return os.getenv(name, "").strip() or None
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "1" if default else "0").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean; received {raw!r}")
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     """Environment-backed operational settings with safe local defaults."""
@@ -58,6 +67,7 @@ class Settings:
     telegram_bot_token: str | None
     telegram_chat_id: str | None
     alert_min_confidence: int
+    startup_backfill: bool
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -95,6 +105,7 @@ class Settings:
             telegram_bot_token=telegram_bot_token,
             telegram_chat_id=telegram_chat_id,
             alert_min_confidence=_positive_int("NSE_OI_ALERT_MIN_CONFIDENCE", 80, minimum=1),
+            startup_backfill=_env_bool("NSE_OI_STARTUP_BACKFILL", True),
         )
 
 

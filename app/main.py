@@ -7,7 +7,8 @@ import asyncio
 import time
 import csv
 import io
-from datetime import datetime, timedelta
+import os
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -54,6 +55,7 @@ from analytics.intraday import observe as observe_intraday
 from analytics.intraday import candle_vwap
 from analytics.technical import ema as calculate_ema
 from collector.bhavcopy import collect_equity_bhavcopy
+from collector.backfill import backfill_recent_bhavcopies
 from collector.participant_oi import collect_participant_oi
 from signal_engine.quality import apply_daily_technical_context, apply_intraday_observation_context
 from analytics.market_overview import normalize_market_overview
@@ -96,6 +98,7 @@ _last_refresh_at_ist: str | None = None
 _last_refresh_was_stale = False
 _last_snapshot_id: int | None = None
 _refresh_lock = asyncio.Lock()
+_backfill_lock = asyncio.Lock()
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = PROJECT_ROOT / "static"
 
@@ -346,6 +349,48 @@ async def scheduled_bhavcopy_ingestion() -> None:
     await ingest_daily_bhavcopy()
 
 
+def _backfill_end_date() -> date:
+    """Use the latest completed IST calendar day as the backfill boundary."""
+    return now_ist().date() - timedelta(days=1)
+
+
+async def run_backfill(*, required_days: int = 60, max_downloads: int = 60) -> dict[str, object]:
+    started = time.monotonic()
+    started_at = now_ist().isoformat()
+    async with _backfill_lock:
+        result = await asyncio.to_thread(
+            backfill_recent_bhavcopies,
+            repository,
+            end_date=_backfill_end_date(),
+            required_days=required_days,
+            max_downloads=max_downloads,
+        )
+    result.update({
+        "started_at_ist": started_at,
+        "duration_seconds": round(time.monotonic() - started, 2),
+        "daily_equity_data": repository.daily_equity_bar_summary(),
+    })
+    return result
+
+
+async def automatic_startup_backfill() -> None:
+    if not settings.startup_backfill:
+        return
+    if repository.daily_equity_bar_summary().get("bars", 0) > 0:
+        return
+    logger.warning("Daily bhavcopy history is empty; automatic bounded backfill is starting. Monitor /api/health.")
+    try:
+        result = await run_backfill()
+        logger.info("Automatic bhavcopy backfill finished: %s", result)
+    except Exception:
+        logger.exception("Automatic bhavcopy backfill failed")
+
+
+def render_startup_backfill_enabled() -> bool:
+    """Only run automatic backfill on Render; local/dev uses the HTTP trigger."""
+    return bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+
+
 # ?? Background poller ?????????????????????????????????????????????????????????
 
 async def background_poller():
@@ -423,13 +468,13 @@ async def lifespan(app: FastAPI):
     )
     scheduler.start()
     app.state.scheduler = scheduler
-    # Render Free has an ephemeral filesystem; do not auto-run an unbounded
-    # backfill at startup. Make the required operator action unmistakable.
+    # Render Free has an ephemeral filesystem; run one bounded backfill without
+    # blocking health/startup, then expose the state through /api/health.
     if repository.daily_equity_bar_summary().get("bars", 0) == 0:
-        logger.warning(
-            "Daily bhavcopy history is empty — stock day-relative prices unavailable. "
-            "Run: python -m collector.backfill --days 60 --max-downloads 60"
-        )
+        if settings.startup_backfill and render_startup_backfill_enabled():
+            asyncio.create_task(automatic_startup_backfill())
+        else:
+            logger.warning("Daily bhavcopy history is empty and automatic backfill is disabled.")
     # A newly deployed year is unknown until NSE's public calendar loads.
     # Await only in that case: normal startup stays local and fast.
     if not has_holiday_calendar_for_year(now_ist().year):
@@ -492,6 +537,22 @@ async def health():
         "daily_equity_data": daily_equity_data,
         "bhavcopy_backfill_required": daily_equity_data.get("bars", 0) == 0,
     }
+
+
+@app.post("/api/admin/backfill")
+async def admin_backfill(
+    days: int = Query(60, ge=1, le=120),
+    max_downloads: int = Query(60, ge=1, le=120),
+    x_debug_token: str = Header(default=""),
+):
+    """Run one bounded daily-bar backfill without requiring Render Shell access."""
+    if not DEBUG_TOKEN:
+        raise HTTPException(status_code=404, detail="Backfill endpoint is disabled")
+    if x_debug_token != DEBUG_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-Debug-Token header")
+    if _backfill_lock.locked():
+        raise HTTPException(status_code=409, detail="Backfill is already running")
+    return await run_backfill(required_days=days, max_downloads=max_downloads)
 
 
 @app.get("/api/sources")

@@ -17,6 +17,8 @@ services:
         value: "60"
       - key: NSE_OI_HISTORY_RETENTION_DAYS
         value: "30"
+      - key: NSE_OI_STARTUP_BACKFILL
+        value: "1"
       - key: DEBUG_TOKEN
         generateValue: true
 

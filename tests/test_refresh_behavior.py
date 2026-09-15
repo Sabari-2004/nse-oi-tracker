@@ -29,4 +29,5 @@ def test_signal_api_exposes_actual_data_source_status():
 
 def test_startup_warns_when_bhavcopy_history_is_empty():
     assert "Daily bhavcopy history is empty" in MAIN
-    assert "python -m collector.backfill --days 60 --max-downloads 60" in MAIN
+    assert "automatic bounded backfill" in MAIN
+    assert "/api/admin/backfill" in MAIN
