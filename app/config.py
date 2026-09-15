@@ -31,6 +31,12 @@ OI_CHANGE_THRESHOLD    = 3.00    # 3.00% — filter routine OI churn
 CONFIDENCE_HIGH   = 75   # ⭐⭐⭐⭐ — very high confidence
 CONFIDENCE_MEDIUM = 65   # ⭐⭐ — diagnostic tier only; not published by default
 
+# Quality-feed guardrails reduce flip-flops and alert noise. They do not turn
+# public-data observations into guaranteed trade recommendations.
+QUALITY_MIN_CONFIDENCE = CONFIDENCE_HIGH
+QUALITY_REQUIRED_SCANS = 2
+QUALITY_MAX_SIGNALS = 10
+
 # Below MEDIUM → filtered out
 
 

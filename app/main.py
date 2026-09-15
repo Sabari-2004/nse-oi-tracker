@@ -428,7 +428,11 @@ async def lifespan(app: FastAPI):
     # Await only in that case: normal startup stays local and fast.
     if not has_holiday_calendar_for_year(now_ist().year):
         await scheduled_holiday_calendar_refresh()
-    await scheduled_refresh()
+    # Preserve an already-populated cache (important for warm restarts and
+    # deterministic API tests); production still performs the initial refresh
+    # whenever no current signal snapshot exists.
+    if cache.get("all_signals") is None:
+        await scheduled_refresh()
     yield
     scheduler.shutdown(wait=False)
 
