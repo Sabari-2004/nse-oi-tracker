@@ -20,10 +20,10 @@ BASE = "https://apiconnect.angelone.in/rest"
 
 class AngelOneSource:
     def __init__(self):
-        self.api_key = os.getenv("ANGEL_API_KEY", "")
-        self.client_code = os.getenv("ANGEL_CLIENT_CODE", "")
-        self.pin = os.getenv("ANGEL_PIN", os.getenv("ANGEL_PASSWORD", ""))
-        self.totp_secret = os.getenv("ANGEL_TOTP_SECRET", "")
+        self.api_key = os.getenv("ANGEL_ONE_API_KEY") or os.getenv("ANGEL_API_KEY", "")
+        self.client_code = os.getenv("ANGEL_ONE_CLIENT_CODE") or os.getenv("ANGEL_CLIENT_CODE", "")
+        self.pin = os.getenv("ANGEL_ONE_PASSWORD") or os.getenv("ANGEL_PASSWORD") or os.getenv("ANGEL_PIN", "")
+        self.totp_secret = os.getenv("ANGEL_ONE_TOTP_SECRET") or os.getenv("ANGEL_TOTP_SECRET", "")
         self.state = os.getenv("ANGEL_STATE", "live")
         try:
             self.tokens = json.loads(os.getenv("ANGEL_SYMBOL_TOKENS", "{}"))

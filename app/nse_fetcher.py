@@ -269,6 +269,26 @@ _nse = NSESession()
 _price_snapshots: OrderedDict[str, float] = OrderedDict()
 _price_snapshot_lock = RLock()
 MAX_PRICE_SNAPSHOTS = 1_000
+_INDEX_PREVIOUS_CLOSES: dict[str, float] = {}
+_INDEX_PREVIOUS_CLOSES_AT = 0.0
+INDEX_PREVIOUS_CLOSE_TTL_SECONDS = 600
+_INDEX_NAMES = {"NIFTY": "NIFTY 50", "BANKNIFTY": "NIFTY BANK", "FINNIFTY": "NIFTY FINANCIAL SERVICES", "MIDCPNIFTY": "NIFTY MIDCAP SELECT"}
+
+
+def _index_previous_closes() -> dict[str, float]:
+    global _INDEX_PREVIOUS_CLOSES, _INDEX_PREVIOUS_CLOSES_AT
+    now = time.time()
+    if now - _INDEX_PREVIOUS_CLOSES_AT < INDEX_PREVIOUS_CLOSE_TTL_SECONDS:
+        return _INDEX_PREVIOUS_CLOSES
+    try:
+        payload = _nse.get(f"{NSE_BASE}/api/allIndices", referer="https://www.nseindia.com/market-data/live-equity-market") or {}
+        rows = payload.get("data") or []
+        names = {name: key for key, name in _INDEX_NAMES.items()}
+        _INDEX_PREVIOUS_CLOSES = {key: float(row["previousClose"]) for row in rows if (key := names.get(str(row.get("index") or "").strip().upper())) and float(row.get("previousClose") or 0) > 0}
+        _INDEX_PREVIOUS_CLOSES_AT = now
+    except (TypeError, ValueError, AttributeError, KeyError):
+        logger.warning("NSE allIndices previous-close lookup failed")
+    return _INDEX_PREVIOUS_CLOSES
 
 
 # ?? Public data functions ??????????????????????????????????????????????????????
@@ -365,6 +385,10 @@ def fetch_all_fno_oi_change() -> list[dict]:
                     enriched["change"] = current_price - stored_close
                     enriched["pChange"] = ((current_price - stored_close) / stored_close) * 100
                     enriched["price_source"] = "previous_close_day_relative"
+                elif symbol in _INDEX_NAMES and (index_close := _index_previous_closes().get(symbol)):
+                    enriched["change"] = current_price - index_close
+                    enriched["pChange"] = ((current_price - index_close) / index_close) * 100
+                    enriched["price_source"] = "all_indices_previous_close"
                 elif previous_price and previous_price > 0:
                     enriched["ltp"] = current_price
                     enriched["change"] = current_price - previous_price
