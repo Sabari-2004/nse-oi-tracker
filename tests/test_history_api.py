@@ -122,9 +122,12 @@ def test_heatmap_endpoint_uses_cached_chain_without_a_live_fetch(monkeypatch):
 
 def test_market_intelligence_reuses_cached_public_context(monkeypatch, tmp_path):
     repository = SignalRepository(tmp_path / "tracker.sqlite3")
-    main.cache.set("market-overview", {"indices": {"INDIA_VIX": {"last": 12}}}, ttl=60)
-    main.cache.set("all_signals", [{"signal": "LONG_BUILDUP"}], ttl=60)
+    # Keep these fixtures alive for the whole suite; the suite includes slow
+    # live-data regression checks and a 60-second TTL makes this test flaky.
+    main.cache.set("market-overview", {"indices": {"INDIA_VIX": {"last": 12}}}, ttl=3600)
+    main.cache.set("all_signals", [{"signal": "LONG_BUILDUP"}], ttl=3600)
     monkeypatch.setattr(main, "repository", repository)
+    monkeypatch.setattr(main, "is_market_open", lambda: False)
     with TestClient(main.app) as client:
         response = client.get("/api/market-intelligence")
     assert response.status_code == 200
