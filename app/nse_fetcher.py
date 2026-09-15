@@ -212,6 +212,21 @@ class NSESession:
                 return None
             return None
 
+    def get_archive_text(self, url: str, referer: str, retries: int = 2) -> str | None:
+        """Fetch a static NSE archive without the expensive live-page seed cycle."""
+        headers = {**BASE_HEADERS, "Referer": referer, "Accept": "text/csv,text/plain,*/*"}
+        for attempt in range(retries):
+            try:
+                response = cffi_requests.get(url, headers=headers, impersonate=CHROME, timeout=25)
+                if response.status_code == 200 and response.content:
+                    return response.text
+                logger.warning("HTTP %s fetching archive %s", response.status_code, url)
+            except Exception as exc:
+                logger.warning("Archive fetch failed (attempt %s) %s: %s", attempt + 1, url, exc)
+            if attempt + 1 < retries:
+                time.sleep(self._retry_delay(attempt + 1))
+        return None
+
     def get_seeded(self, seed_url: str, seed_referer: str,
                    api_url: str, api_referer: str,
                    retries: int = 3) -> dict | None:
@@ -436,7 +451,7 @@ def fetch_equity_bhavcopy(trade_date: date) -> str | None:
     symbol. NSE does not publish a bhavcopy on market holidays.
     """
     filename = f"sec_bhavdata_full_{trade_date.strftime('%d%m%Y')}.csv"
-    return _nse.get_text(
+    return _nse.get_archive_text(
         f"https://nsearchives.nseindia.com/products/content/{filename}",
         referer="https://www.nseindia.com/market-data/all-upcoming-issues-ipo",
     )
