@@ -476,6 +476,7 @@ async def health():
     """Health check ? GET and HEAD supported (UptimeRobot uses HEAD)."""
     now = now_ist()
     status = get_market_status(now)
+    daily_equity_data = repository.daily_equity_bar_summary()
     return {
         "status":        "ok",
         "time_ist":      now.strftime("%Y-%m-%d %H:%M:%S IST"),
@@ -488,7 +489,8 @@ async def health():
         "last_refresh_was_stale": _last_refresh_was_stale,
         "last_snapshot_id": _last_snapshot_id,
         "holiday_calendar": holiday_calendar_metadata(),
-        "daily_equity_data": repository.daily_equity_bar_summary(),
+        "daily_equity_data": daily_equity_data,
+        "bhavcopy_backfill_required": daily_equity_data.get("bars", 0) == 0,
     }
 
 

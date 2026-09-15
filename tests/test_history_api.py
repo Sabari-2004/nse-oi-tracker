@@ -175,3 +175,13 @@ def test_backtest_endpoint_and_csv_export_are_auditable(monkeypatch, tmp_path):
     assert "not a validated" in response.json()["metrics"]["methodology_caveat"]
     assert export.status_code == 200
     assert "BACKTEST" in export.text
+
+
+def test_health_exposes_bhavcopy_backfill_status(monkeypatch, tmp_path):
+    repository = SignalRepository(tmp_path / "health.sqlite3")
+    monkeypatch.setattr(main, "repository", repository)
+    with TestClient(main.app) as client:
+        response = client.get("/api/health")
+    assert response.status_code == 200
+    assert response.json()["daily_equity_data"]["bars"] == 0
+    assert response.json()["bhavcopy_backfill_required"] is True
