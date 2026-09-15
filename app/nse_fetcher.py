@@ -283,16 +283,36 @@ _NATIVE_PRICE_CHANGE_FIELDS = (
 )
 
 
-def _stored_previous_close(symbol: str) -> float | None:
-    """Read the latest prior NSE bhavcopy close when available."""
-    db = Path(os.getenv("NSE_OI_DATABASE", "nse_oi_tracker.sqlite3"))
-    if not db.is_absolute():
-        db = Path(os.getenv("NSE_OI_DATA_DIR", "data")) / db
+PREVIOUS_CLOSE_MAX_AGE_DAYS = 10
+
+
+def _previous_close_database_path() -> Path:
+    """Resolve the bhavcopy database exactly like config.settings does."""
+    project_root = Path(__file__).resolve().parents[1]
+    configured_dir = Path(os.getenv("NSE_OI_DATA_DIR", "data"))
+    data_dir = configured_dir if configured_dir.is_absolute() else project_root / configured_dir
+    database = Path(os.getenv("NSE_OI_DATABASE", "nse_oi_tracker.sqlite3"))
+    return database if database.is_absolute() else data_dir / database
+
+
+def _stored_previous_close(symbol: str, *, today: date | None = None) -> float | None:
+    """Read a recent NSE bhavcopy close; reject stale data as unsafe."""
     try:
-        with sqlite3.connect(db) as con:
-            row = con.execute("SELECT close FROM daily_equity_bars WHERE symbol=? ORDER BY trade_date DESC LIMIT 1", (symbol,)).fetchone()
-        return float(row[0]) if row and float(row[0]) > 0 else None
-    except Exception:
+        with sqlite3.connect(_previous_close_database_path()) as con:
+            row = con.execute(
+                "SELECT trade_date, close FROM daily_equity_bars WHERE symbol=? ORDER BY trade_date DESC LIMIT 1",
+                (symbol.upper().strip(),),
+            ).fetchone()
+        if not row or float(row[1] or 0) <= 0:
+            return None
+        trade_date = date.fromisoformat(str(row[0]))
+        reference_date = today or date.today()
+        age_days = (reference_date - trade_date).days
+        if age_days > PREVIOUS_CLOSE_MAX_AGE_DAYS or age_days < 0:
+            logger.warning("Ignoring invalid previous close for %s: %s", symbol, trade_date)
+            return None
+        return float(row[1])
+    except (OSError, sqlite3.Error, TypeError, ValueError):
         return None
 
 
