@@ -46,3 +46,8 @@ history for operational decisions.
   origins if a separate dashboard is deployed.
 - Alert URLs and Telegram credentials are optional. They send candidate
   observations labelled `NO_TRADE`; they never place orders.
+
+
+## Render Free daily-history note
+
+Render Free uses an ephemeral filesystem, so every deploy or restart clears the stored `daily_equity_bars` history. After each deploy, open the Render Shell and run `python -m collector.backfill --days 60 --max-downloads 60` once. Until the backfill completes, stock rows use the clearly labelled minute-level fallback; index rows remain available through the NSE `allIndices` previous-close source. The startup warning identifies this condition, and `/api/health` reports the quick check at `daily_equity_data.bars`.

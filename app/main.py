@@ -423,6 +423,13 @@ async def lifespan(app: FastAPI):
     )
     scheduler.start()
     app.state.scheduler = scheduler
+    # Render Free has an ephemeral filesystem; do not auto-run an unbounded
+    # backfill at startup. Make the required operator action unmistakable.
+    if repository.daily_equity_bar_summary().get("bars", 0) == 0:
+        logger.warning(
+            "Daily bhavcopy history is empty — stock day-relative prices unavailable. "
+            "Run: python -m collector.backfill --days 60 --max-downloads 60"
+        )
     # A newly deployed year is unknown until NSE's public calendar loads.
     # Await only in that case: normal startup stays local and fast.
     if not has_holiday_calendar_for_year(now_ist().year):
