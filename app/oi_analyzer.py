@@ -61,6 +61,12 @@ CATEGORY_TO_SIGNAL = {
 _IST = ZoneInfo("Asia/Kolkata")
 _field_usage: dict[str, dict[str, str | None]] = {}
 _last_cas_time_ist: str | None = None
+_last_scan_data_status = "NOT_RUN"
+
+
+def last_scan_data_status() -> str:
+    """Return whether the latest scan had upstream rows or was unavailable."""
+    return _last_scan_data_status
 
 
 def sample_field_usage(limit: int = 5) -> dict[str, dict[str, str | None]]:
@@ -324,6 +330,7 @@ def scan_all_fno_realtime() -> list[dict]:
     Quality policy: a row must meet the publish confidence and absolute-OI
     gates. Directional classification alone is not enough to publish a signal.
     """
+    global _last_scan_data_status
     rows = fetch_all_fno_oi_change()
     if rows and angel_one.configured:
         symbols = [_symbol(row) for row in rows if _symbol(row)]
@@ -340,8 +347,11 @@ def scan_all_fno_realtime() -> list[dict]:
                 row["_data_source"] = "Angel One FULL quote"
 
     if not rows:
+        _last_scan_data_status = "UNAVAILABLE"
         logger.info("No data returned (market closed or NSE temporarily unavailable)")
         return []
+
+    _last_scan_data_status = "RECEIVED"
 
     results:  list[dict] = []
     seen:     set[str]   = set()

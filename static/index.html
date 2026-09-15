@@ -419,9 +419,11 @@
             <template x-if="!loading && filtered.length === 0 && signals.length === 0">
               <tr><td colspan="13" class="py-20 text-center text-gray-600">
                 <div class="text-5xl mb-3 opacity-30">??</div>
-                <div class="text-sm" x-text="marketOpen
-                  ? 'Scanning all F&O stocks? No strong signals yet. Try refresh.'
-                  : (marketStatusLabel || 'Market closed (Mon?Fri 09:15?15:30 IST). Signals appear during live market.')">
+                <div class="text-sm" x-text="dataStatus === 'UNAVAILABLE'
+                  ? 'NSE live OI data is temporarily unavailable; no signal can be computed. Try Refresh.'
+                  : (marketOpen
+                    ? 'Scanning all F&O stocks? No strong signals yet. Try refresh.'
+                    : (marketStatusLabel || 'Market closed (Mon?Fri 09:15?15:30 IST). Signals appear during live market.'))">
                 </div>
               </td></tr>
             </template>
@@ -1062,7 +1064,7 @@ function scanner() {
   return {
     /* ?? state ?? */
     signals: [], totalActive: 0, signalCounts: {}, highConf: 0, mediumConf: 0, availableSectors: [],
-    marketDataSource: '', newsRefreshTimer: null,
+    marketDataSource: '', dataStatus: 'NOT_RUN', newsRefreshTimer: null,
     marketOverview: null, marketOverviewError: '',
     news: [], newsSymbol: '', newsLoading: false,
     intelligence: null, intelligenceLoading: false, participantOI: null,
@@ -1275,6 +1277,7 @@ function scanner() {
         this.highConf     = d.high_confidence || 0;
         this.mediumConf   = d.medium_confidence || 0;
         this.marketDataSource = d.primary_market_data_source || '';
+        this.dataStatus    = d.data_status || 'NOT_RUN';
         this.availableSectors = d.available_sectors || this.availableSectors;
         this.marketOpen   = d.market_open ?? this.marketOpen;
         this.marketStatusLabel = d.market_status_label || '';

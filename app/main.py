@@ -32,6 +32,7 @@ from app.market_calendar import (
 from app.cache import cache
 from app.oi_analyzer import (
     scan_all_fno_realtime,
+    last_scan_data_status,
     get_option_chain_analysis,
     SIGNAL_META,
     CATEGORY_TO_SIGNAL,
@@ -582,6 +583,7 @@ async def oi_signals(
         if any(r.get("realtime_source") == "angel_one_read_only" for r in cached)
         else "nse_public_feed"
     )
+    data_status = last_scan_data_status()
 
     return {
         "market_open":       status == MARKET_STATUS_OPEN,
@@ -595,6 +597,11 @@ async def oi_signals(
         "signal_meta":       SIGNAL_META,
         "available_sectors": known_sectors(),
         "signals":           results,
+        "data_status":       data_status,
+        "data_warning": (
+            "NSE upstream returned no OI rows; no signal can be computed right now."
+            if data_status == "UNAVAILABLE" and not results else None
+        ),
         "primary_market_data_source": active_source,
         "angel_one_configured": angel_market_data is not None,
         "nse_public_feed_is_fallback": active_source == "nse_public_feed" and angel_market_data is not None,
