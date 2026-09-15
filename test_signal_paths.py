@@ -107,6 +107,8 @@ def test_quality_gate_requires_high_confidence_for_publication(monkeypatch):
     monkeypatch.setattr(oi_analyzer, "fetch_all_fno_oi_change", lambda: [{}, {}])
     parsed = iter([noisy, quality])
     monkeypatch.setattr(oi_analyzer, "_parse_row", lambda row: next(parsed))
+    assert oi_analyzer.scan_all_fno_realtime() == []
+    parsed = iter([noisy, quality])
     assert [row["symbol"] for row in oi_analyzer.scan_all_fno_realtime()] == ["QUALITYCO"]
 
 

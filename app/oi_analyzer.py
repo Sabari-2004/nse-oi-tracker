@@ -18,6 +18,7 @@ from app.config import (
     PRICE_CHANGE_THRESHOLD, OI_CHANGE_THRESHOLD,
     MIN_OI_ABSOLUTE, CONFIDENCE_HIGH, CONFIDENCE_MEDIUM,
     PUBLISH_MIN_CONFIDENCE, PUBLISH_MIN_OI_ABSOLUTE,
+    QUALITY_REQUIRED_SCANS, QUALITY_MAX_SIGNALS,
     STRIKES_EACH_SIDE, INDICES,
 )
 from app.nse_fetcher import (
@@ -62,6 +63,9 @@ _IST = ZoneInfo("Asia/Kolkata")
 _field_usage: dict[str, dict[str, str | None]] = {}
 _last_cas_time_ist: str | None = None
 _last_scan_data_status = "NOT_RUN"
+# symbol -> (direction, consecutive scan count). A reversal resets the count,
+# preventing rapid opposing signals for the same stock from being published.
+_signal_stability: dict[str, tuple[str, int]] = {}
 
 
 def last_scan_data_status() -> str:
@@ -367,14 +371,19 @@ def scan_all_fno_realtime() -> list[dict]:
         if result["symbol"] in seen:
             continue
         seen.add(result["symbol"])
+        symbol = result["symbol"]
+        direction = result.get("signal_direction") or result.get("direction") or ""
+        previous_direction, previous_count = _signal_stability.get(symbol, ("", 0))
+        count = previous_count + 1 if previous_direction == direction else 1
+        _signal_stability[symbol] = (direction, count)
+        if count < QUALITY_REQUIRED_SCANS:
+            continue
+        result["quality_gate"] = "CONFIRMED_TWO_SCAN_DIRECTION"
+        result["stability_scans"] = count
         results.append(result)
-
-    # Sort: HIGH first → higher confidence → higher strength
-    results.sort(key=lambda r: (
-        0 if r["confidence_tier"] == "HIGH" else 1,
-        -r["confidence"],
-        -r["strength"],
-    ))
+    # Sort strongest first and expose only a small quality feed.
+    results.sort(key=lambda r: (-r["confidence"], -r["strength"], r["symbol"]))
+    results = results[:QUALITY_MAX_SIGNALS]
 
     high   = sum(1 for r in results if r["confidence_tier"] == "HIGH")
     medium = sum(1 for r in results if r["confidence_tier"] == "MEDIUM")
