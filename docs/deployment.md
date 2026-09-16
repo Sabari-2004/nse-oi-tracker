@@ -50,13 +50,4 @@ history for operational decisions.
 
 ## Render Free daily-history note
 
-Render Free uses an ephemeral filesystem, so every deploy or restart clears the stored `daily_equity_bars` history. On first boot with empty history, the app automatically starts one bounded backfill in the background (up to 60 downloads) without blocking startup. Monitor `/api/health` until `daily_equity_data.bars` is greater than zero and `bhavcopy_backfill_required` is false. Until the backfill completes, stock rows use the clearly labelled minute-level fallback; index rows remain available through the NSE `allIndices` previous-close source.
-
-Render Free has no Shell access. If a re-run is needed, set `DEBUG_TOKEN` and call the authenticated endpoint from any terminal:
-
-```bash
-curl -X POST "https://<app>.onrender.com/api/admin/backfill" \
-  -H "X-Debug-Token: <DEBUG_TOKEN>"
-```
-
-Set `NSE_OI_STARTUP_BACKFILL=0` to disable the automatic behavior.
+Render Free uses an ephemeral filesystem, so every deploy or restart clears the stored `daily_equity_bars` history. The application automatically runs this bounded backfill once at startup when history is empty: `python -m collector.backfill --days 60 --max-downloads 60`. No Render Shell access is required. Until the backfill completes, stock rows use the clearly labelled minute-level fallback; index rows remain available through the NSE `allIndices` previous-close source. The startup warning identifies this condition, and `/api/health` reports the quick check at `daily_equity_data.bars`.
