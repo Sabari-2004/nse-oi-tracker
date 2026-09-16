@@ -81,6 +81,7 @@ class SignalRepository:
                     max_target_hit INTEGER NOT NULL DEFAULT 0,
                     status TEXT NOT NULL DEFAULT 'OPEN',
                     result TEXT,
+                    result_source TEXT,
                     closed_at_ist TEXT,
                     payload_json TEXT NOT NULL,
                     archived INTEGER NOT NULL DEFAULT 0,
@@ -189,6 +190,10 @@ class SignalRepository:
             if "max_target_hit" not in columns:
                 connection.execute(
                     "ALTER TABLE signal_events ADD COLUMN max_target_hit INTEGER NOT NULL DEFAULT 0"
+                )
+            if "result_source" not in columns:
+                connection.execute(
+                    "ALTER TABLE signal_events ADD COLUMN result_source TEXT"
                 )
 
     def upsert_daily_equity_bars(self, bars: Iterable[dict[str, Any]]) -> int:
@@ -668,19 +673,155 @@ class SignalRepository:
                 updated += 1
         return updated
 
-    def expire_open_events(self, observed_at: datetime) -> int:
-        """Close unresolved current-day records after market hours."""
+    @staticmethod
+    def _day_end_result(direction: str, entry: Any, exit_price: Any) -> str:
+        """Grade an event closed at market end from its directional P&L.
+
+        WIN/LOSS/FLAT describe where the price went relative to entry by the
+        close; a TG1 hit earlier in the session stays a WIN even if the close
+        gave some of it back.  FLAT tolerates noise within 0.05% of entry.
+        Returns 'EXPIRED' only when no usable exit price exists.
+        """
+        try:
+            entry_price = float(entry or 0)
+            close_price = float(exit_price or 0)
+        except (TypeError, ValueError):
+            return "EXPIRED"
+        if entry_price <= 0 or close_price <= 0:
+            return "EXPIRED"
+        delta = close_price - entry_price if direction == "BUY" else entry_price - close_price
+        if delta > entry_price * 0.0005:
+            return "WIN"
+        if delta < -entry_price * 0.0005:
+            return "LOSS"
+        return "FLAT"
+
+    def expire_open_events(self, observed_at: datetime, *, result_source: str = "estimate") -> int:
+        """Close unresolved current-day records after market hours.
+
+        Unresolved events are graded WIN/LOSS/FLAT from their latest tracked
+        price (callers should refresh prices just before the close).  Events
+        that already hit a target keep WIN.  result_source records whether
+        the exit came from a live estimate or the official bhavcopy close.
+        """
         observed_at = as_ist(observed_at)
+        closed_at = observed_at.isoformat()
         with self._connect() as connection:
-            result = connection.execute(
+            rows = connection.execute(
                 """
-                UPDATE signal_events
-                SET status = 'EXPIRED', result = 'EXPIRED', exit_price = current_price, closed_at_ist = ?
+                SELECT id, direction, entry, max_target_hit, current_price, exit_price
+                FROM signal_events
                 WHERE trade_date = ? AND archived = 0 AND status IN ('OPEN', 'TG1_HIT')
                 """,
-                (observed_at.isoformat(), ist_trade_date(observed_at)),
-            )
-            return result.rowcount
+                (ist_trade_date(observed_at),),
+            ).fetchall()
+            updated = 0
+            for row in rows:
+                exit_price = row["exit_price"] if row["exit_price"] is not None else row["current_price"]
+                if int(row["max_target_hit"] or 0) >= 1:
+                    result = "WIN"
+                else:
+                    result = self._day_end_result(str(row["direction"]), row["entry"], exit_price)
+                connection.execute(
+                    """
+                    UPDATE signal_events
+                    SET status = 'EXPIRED', result = ?, result_source = ?, exit_price = ?, closed_at_ist = ?
+                    WHERE id = ?
+                    """,
+                    (result, result_source, exit_price, closed_at, row["id"]),
+                )
+                updated += 1
+            return updated
+
+    def unresolved_event_symbols(self, trade_date: str) -> list[str]:
+        """Distinct symbols with events still OPEN or TG1_HIT on one date."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT symbol FROM signal_events
+                WHERE trade_date = ? AND archived = 0 AND status IN ('OPEN', 'TG1_HIT')
+                ORDER BY symbol
+                """,
+                (trade_date,),
+            ).fetchall()
+        return [str(row["symbol"]) for row in rows]
+
+    def refresh_event_prices(self, prices: dict[str, float], observed_at: datetime) -> int:
+        """Update tracked current_price for unresolved events from a final poll.
+
+        Status is unchanged; only the tracked price moves, so 15:31 grading
+        uses the real ~15:30 market instead of the last time the symbol
+        happened to appear in the published feed.
+        """
+        if not prices:
+            return 0
+        observed_at = as_ist(observed_at)
+        updated = 0
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, symbol FROM signal_events
+                WHERE trade_date = ? AND archived = 0 AND status IN ('OPEN', 'TG1_HIT')
+                """,
+                (ist_trade_date(observed_at),),
+            ).fetchall()
+            for row in rows:
+                price = prices.get(str(row["symbol"]))
+                if price is None or float(price) <= 0:
+                    continue
+                connection.execute(
+                    "UPDATE signal_events SET current_price = ? WHERE id = ?",
+                    (float(price), row["id"]),
+                )
+                updated += 1
+        return updated
+
+    def regrade_with_bhavcopy_close(self, trade_date: str) -> int:
+        """Re-grade estimated day-end results with the official NSE close.
+
+        After the 18:10 bhavcopy ingestion, events whose exit price was an
+        estimate get the true closing price and a recomputed verdict.  Rows
+        that settled on a target/stop intraday keep their real exit price.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, symbol, direction, entry, max_target_hit
+                FROM signal_events
+                WHERE trade_date = ? AND archived = 0
+                  AND status IN ('EXPIRED')
+                  AND result_source = 'estimate'
+                  AND exit_price IS NOT NULL
+                  AND COALESCE(max_target_hit, 0) < 1
+                """,
+                (trade_date,),
+            ).fetchall()
+            updated = 0
+            for row in rows:
+                bar = connection.execute(
+                    """
+                    SELECT close FROM daily_equity_bars
+                    WHERE trade_date = ? AND symbol = ? AND close > 0
+                    """,
+                    (trade_date, str(row["symbol"])),
+                ).fetchone()
+                if not bar:
+                    continue
+                close_price = float(bar[0])
+                if int(row["max_target_hit"] or 0) >= 1:
+                    result = "WIN"
+                else:
+                    result = self._day_end_result(str(row["direction"]), row["entry"], close_price)
+                connection.execute(
+                    """
+                    UPDATE signal_events
+                    SET exit_price = ?, result = ?, result_source = 'bhavcopy_close'
+                    WHERE id = ?
+                    """,
+                    (close_price, result, row["id"]),
+                )
+                updated += 1
+            return updated
 
     def history_for_date(self, trade_date: str, *, limit: int = 1000) -> tuple[list[dict[str, Any]], int]:
         """Return visible events and the total count for one IST trading date."""
@@ -720,6 +861,7 @@ class SignalRepository:
                     "max_target_hit": row["max_target_hit"],
                     "status": row["status"],
                     "result": row["result"],
+                    "result_source": row["result_source"],
                 }
             )
             events.append(payload)
@@ -748,6 +890,14 @@ class SignalRepository:
         tp1_hits = sum(1 for row in rows if int(row["max_target_hit"]) >= 1)
         tp2_hits = sum(1 for row in rows if int(row["max_target_hit"]) >= 2)
         wins = tp1_hits
+        losses = counts["SL_HIT"]
+        graded = 0
+        for row in rows:
+            if row["status"] not in ("OPEN", "TG1_HIT") and row["exit_price"] is not None and int(row["max_target_hit"] or 0) < 1:
+                if str(row["result"]) == "LOSS":
+                    losses += 1
+                if str(row["result"]) in ("WIN", "LOSS"):
+                    graded += 1
         return {
             "signals_generated": len(rows),
             "wins": wins,
@@ -757,6 +907,7 @@ class SignalRepository:
             "sl_hits": counts["SL_HIT"],
             "open": open_events,
             "expired": counts["EXPIRED"],
+            "graded": graded,
             "accuracy": round((wins / closed) * 100, 2) if closed else 0.0,
             "average_rr": round(
                 sum(float(row["risk_reward"]) for row in rows) / len(rows), 2

@@ -95,7 +95,6 @@ trading dates. It is safe to rerun after a network interruption.
 ## Verification
 
 ```powershell
-.\.venv\Scripts\python verify_history_audit.py
 .\.venv\Scripts\python -m pytest -q
 ```
 

@@ -140,7 +140,7 @@ def test_medium_score_signal_remains_no_trade_but_explains_missing_factors():
 
 def test_angel_one_adapter_is_read_only():
     from pathlib import Path
-    source = (Path(__file__).parent / "app" / "angel_one.py").read_text(encoding="utf-8")
+    source = (Path(__file__).parents[1] / "app" / "angel_one.py").read_text(encoding="utf-8")
     assert "market/v1/quote/" in source
     assert "placeOrder" not in source
     assert "modifyOrder" not in source
