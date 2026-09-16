@@ -8,6 +8,9 @@ import time
 import csv
 import io
 import os
+import gc
+import ctypes
+import resource
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -263,10 +266,26 @@ def _refresh_signals() -> list[dict]:
     return signals
 
 
+def _release_scan_memory() -> None:
+    """Return freed scan-cycle memory to the OS where glibc supports it."""
+    gc.collect()
+    try:
+        ctypes.CDLL(None).malloc_trim(0)
+    except (AttributeError, OSError):
+        pass
+
+
+def _refresh_signals_and_release_memory() -> list[dict]:
+    try:
+        return _refresh_signals()
+    finally:
+        _release_scan_memory()
+
+
 async def refresh_signals() -> list[dict]:
     """Serialize all refresh callers to avoid upstream request stampedes."""
     async with _refresh_lock:
-        return await asyncio.to_thread(_refresh_signals)
+        return await asyncio.to_thread(_refresh_signals_and_release_memory)
 
 
 async def scheduled_refresh() -> None:
@@ -400,7 +419,7 @@ async def background_poller():
     if is_market_open():
         logger.info("Market open ? initial scan?")
         try:
-            await asyncio.to_thread(_refresh_signals)
+            await asyncio.to_thread(_refresh_signals_and_release_memory)
         except Exception as e:
             logger.error(f"Initial scan error: {e}")
 
@@ -409,7 +428,7 @@ async def background_poller():
         if is_market_open():
             logger.info("Polling ? scanning F&O stocks?")
             try:
-                await asyncio.to_thread(_refresh_signals)
+                await asyncio.to_thread(_refresh_signals_and_release_memory)
             except Exception as e:
                 logger.error(f"Poll scan error: {e}")
 
@@ -468,6 +487,7 @@ async def lifespan(app: FastAPI):
     )
     scheduler.start()
     app.state.scheduler = scheduler
+    gc.freeze()
     # Render Free has an ephemeral filesystem; run one bounded backfill without
     # blocking health/startup, then expose the state through /api/health.
     if repository.daily_equity_bar_summary().get("bars", 0) == 0:
@@ -530,6 +550,7 @@ async def health():
         "market_status_label": MARKET_STATUS_LABELS[status],
         "version":       APP_VERSION,
         "database":       "ready",
+        "memory_rss_mb":  round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2),
         "last_refresh_at_ist": _last_refresh_at_ist,
         "last_refresh_was_stale": _last_refresh_was_stale,
         "last_snapshot_id": _last_snapshot_id,

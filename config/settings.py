@@ -68,6 +68,7 @@ class Settings:
     telegram_chat_id: str | None
     alert_min_confidence: int
     startup_backfill: bool
+    angel_overlay_enabled: bool
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -106,6 +107,7 @@ class Settings:
             telegram_chat_id=telegram_chat_id,
             alert_min_confidence=_positive_int("NSE_OI_ALERT_MIN_CONFIDENCE", 80, minimum=1),
             startup_backfill=_env_bool("NSE_OI_STARTUP_BACKFILL", True),
+            angel_overlay_enabled=_env_bool("ANGEL_OVERLAY_ENABLED", False),
         )
 
 

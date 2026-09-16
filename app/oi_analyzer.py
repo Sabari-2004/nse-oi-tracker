@@ -27,6 +27,7 @@ from app.nse_fetcher import (
     fetch_option_chain_equity,
 )
 from app.angel_one import angel_one
+from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -335,7 +336,9 @@ def scan_all_fno_realtime() -> list[dict]:
     """
     global _last_scan_data_status
     rows = fetch_all_fno_oi_change()
-    if rows and angel_one.configured:
+    # Angel's full quote overlay creates large per-scan batches. Keep it off by
+    # default on Render Free; enable only with a memory budget for paid tiers.
+    if rows and angel_one.configured and get_settings().angel_overlay_enabled:
         symbols = [_symbol(row) for row in rows if _symbol(row)]
         angel_quotes = {}
         for start in range(0, len(symbols), 50):
