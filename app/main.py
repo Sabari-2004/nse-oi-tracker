@@ -60,6 +60,7 @@ from analytics.technical import ema as calculate_ema
 from collector.bhavcopy import collect_equity_bhavcopy
 from collector.backfill import backfill_recent_bhavcopies
 from collector.index_backfill import backfill_index_bars
+from app.database_backup import restore_latest_backup, upload_database_snapshot
 from collector.participant_oi import collect_participant_oi
 from signal_engine.quality import apply_daily_technical_context, apply_intraday_observation_context
 from analytics.market_overview import normalize_market_overview
@@ -375,9 +376,10 @@ async def ingest_daily_index_bars() -> int:
 
 
 async def scheduled_bhavcopy_ingestion() -> None:
-    """Try NSE's completed daily equity and index data after market close."""
+    """Ingest daily data, then make a non-blocking optional SQLite snapshot."""
     await ingest_daily_bhavcopy()
     await ingest_daily_index_bars()
+    await asyncio.to_thread(upload_database_snapshot, settings.database_path)
 
 
 def _backfill_end_date() -> date:
@@ -500,6 +502,10 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     app.state.scheduler = scheduler
     gc.freeze()
+    # Restore analytics before any market-data backfill; the restore is optional
+    # and bounded, so an unavailable bucket never blocks application startup.
+    if repository.daily_equity_bar_summary().get("bars", 0) == 0:
+        await asyncio.to_thread(restore_latest_backup, settings.database_path)
     # Render Free has an ephemeral filesystem; run one bounded backfill without
     # blocking health/startup. The deployment setting controls whether it runs.
     if repository.daily_equity_bar_summary().get("bars", 0) == 0:

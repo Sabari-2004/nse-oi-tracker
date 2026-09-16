@@ -51,3 +51,10 @@ history for operational decisions.
 ## Render Free daily-history note
 
 Render Free uses an ephemeral filesystem, so every deploy or restart clears the stored `daily_equity_bars` history. The application automatically runs this bounded backfill once at startup when history is empty: `python -m collector.backfill --days 60 --max-downloads 60`. No Render Shell access is required. Until the backfill completes, stock rows use the clearly labelled minute-level fallback; index rows remain available through the NSE `allIndices` previous-close source. The startup warning identifies this condition, and `/api/health` reports the quick check at `daily_equity_data.bars`.
+
+
+## Optional free backup for Render Free
+
+Render Free has an ephemeral filesystem. To preserve signal events and analytics across redeploys, configure an S3-compatible or Supabase Storage upload endpoint through `NSE_OI_BACKUP_URL` and its secret `NSE_OI_BACKUP_TOKEN`. After the 18:10 IST daily ingestion, the app uploads one gzip-compressed SQLite snapshot and retains the latest seven manifest entries. On startup, when local daily history is empty, the newest valid snapshot is restored before the normal bounded market-data backfills. Upload or restore failures are logged and never block ingestion or startup. Leave both variables unset to use the existing ephemeral-disk behavior.
+
+For the simplest paid alternative, attach a Render persistent disk mounted at `/data` and set `NSE_OI_DATABASE=/data/nse_oi.db`.
