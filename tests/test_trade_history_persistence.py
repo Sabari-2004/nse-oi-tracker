@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-INDEX = Path(__file__).parent / "static" / "index.html"
+INDEX = Path(__file__).parents[1] / "static" / "index.html"
 
 
 def test_trade_history_is_scoped_to_the_current_day():

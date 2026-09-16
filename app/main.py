@@ -315,10 +315,38 @@ async def scheduled_history_rollover() -> None:
 
 
 async def scheduled_market_close() -> None:
-    """Mark unresolved current-day signal events as expired after close."""
+    """Grade and close unresolved current-day signal events after close.
+
+    Before grading, one last public-feed poll refreshes tracked prices for
+    unresolved symbols, so the WIN/LOSS/FLAT verdict reflects the ~15:30
+    market instead of the last time a symbol happened to be published.
+    """
     try:
+        trade_date = ist_trade_date(now_ist())
+        symbols = await asyncio.to_thread(repository.unresolved_event_symbols, trade_date)
+        refreshed = 0
+        if symbols:
+            try:
+                rows = await asyncio.to_thread(fetch_all_fno_oi_change)
+                wanted = set(symbols)
+                final_prices = {
+                    str(row.get("symbol") or "").upper(): float(row.get("underlyingValue")
+                        or row.get("lastPrice") or row.get("ltp") or 0)
+                    for row in rows
+                    if str(row.get("symbol") or "").upper() in wanted
+                    and float(row.get("underlyingValue") or row.get("lastPrice")
+                              or row.get("ltp") or 0) > 0
+                }
+                refreshed = await asyncio.to_thread(
+                    repository.refresh_event_prices, final_prices, now_ist(),
+                )
+            except Exception:
+                logger.warning("Final-price refresh before close failed; grading with tracked prices")
         expired = await asyncio.to_thread(repository.expire_open_events, now_ist())
-        logger.info("Market-close processing expired %s event(s)", expired)
+        logger.info(
+            "Market-close processing expired %s event(s) (refreshed %s price(s))",
+            expired, refreshed,
+        )
     except Exception:
         logger.exception("Market-close processing failed")
 
@@ -376,9 +404,17 @@ async def ingest_daily_index_bars() -> int:
 
 
 async def scheduled_bhavcopy_ingestion() -> None:
-    """Ingest daily data, then make a non-blocking optional SQLite snapshot."""
-    await ingest_daily_bhavcopy()
+    """Ingest daily data, re-grade estimated exits with official closes, snapshot."""
+    stored = await ingest_daily_bhavcopy()
     await ingest_daily_index_bars()
+    if stored:
+        try:
+            trade_date = ist_trade_date(now_ist())
+            regraded = await asyncio.to_thread(repository.regrade_with_bhavcopy_close, trade_date)
+            if regraded:
+                logger.info("Bhavcopy re-grade updated %s day-end result(s) for %s", regraded, trade_date)
+        except Exception:
+            logger.exception("Bhavcopy close re-grade failed")
     await asyncio.to_thread(upload_database_snapshot, settings.database_path)
 
 
