@@ -196,7 +196,7 @@
       <button @click="activeTab = tab"
               class="px-4 py-2 text-sm font-medium text-gray-500 hover:text-gray-300 transition capitalize"
               :class="activeTab === tab ? 'tab-active' : ''">
-        <span x-text="{signals:'?? Signals', chain:'?? Option Chain', heatmap:'?? OI Heatmap', intel:'?? Intelligence', news:'?? Disclosures', analytics:'?? Analytics', trades:'?? Trade History', guide:'?? Guide'}[tab]"></span>
+        <span x-text="{signals:'?? Signals', chain:'?? Option Chain', heatmap:'?? OI Heatmap', intel:'?? Intelligence', news:'?? Disclosures', analytics:'?? Analytics', trades:'?? Signal History', guide:'?? Guide'}[tab]"></span>
         <template x-if="tab === 'trades' && trades.length > 0">
           <span class="ml-1 text-xs bg-purple-900 text-purple-300 px-1.5 rounded-full"
                 x-text="trades.length"></span>
@@ -331,6 +331,7 @@
                     <span x-text="row.signal_emoji"></span>
                     <span x-text="row.signal_label"></span>
                   </span>
+                  <button x-show="row.news_context?.event_risk === 'HIGH_EVENT_RISK'" @click="newsSymbol=row.symbol; activeTab='news'; fetchNews(false)" class="badge bg-red-950 text-red-300 border-red-800 ml-1" title="High-risk disclosure today">⚠ event</button>
                 </td>
 
                 <!-- Recommendation / candidate boundary -->
@@ -705,11 +706,12 @@
                class="bg-gray-800 border border-gray-700 text-xs text-gray-200 placeholder-gray-600 rounded px-2 py-1.5 w-32 uppercase focus:outline-none focus:border-brand"/>
         <button @click="fetchNews(true)" :disabled="newsLoading"
                 class="text-xs bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-300 px-2.5 py-1 rounded border border-gray-700">Refresh NSE</button>
+        <button @click="newsHighOnly = !newsHighOnly" class="text-xs px-2.5 py-1 rounded border transition" :class="newsHighOnly ? 'bg-red-950 text-red-300 border-red-800' : 'bg-gray-800 text-gray-400 border-gray-700'">High risk only</button>
       </div>
       <div x-show="newsLoading" class="p-6 text-center text-xs text-gray-500">Loading public disclosures?</div>
       <div x-show="!newsLoading && news.length === 0" class="p-10 text-center text-xs text-gray-600">No stored disclosure records yet. Use Refresh NSE to fetch the latest public feed.</div>
       <div class="divide-y divide-gray-800" x-show="!newsLoading && news.length">
-        <template x-for="item in news" :key="item.announcement_id">
+        <template x-for="item in filteredNews" :key="item.announcement_id">
           <article class="px-4 py-3 hover:bg-gray-800/30">
             <div class="flex flex-wrap gap-2 items-center">
               <button @click="openChain(item.symbol)" class="mono text-xs font-bold text-brand hover:text-sky-300" x-text="item.symbol"></button>
@@ -775,7 +777,7 @@
       <!-- Header bar -->
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 class="text-base font-bold text-white">?? Today's Trade Log</h2>
+          <h2 class="text-base font-bold text-white">?? Signal History</h2>
           <p class="text-xs text-gray-500 mt-0.5"
              x-text="'Date: ' + todayLabel + '  ·  Daily history — resets at midnight IST'"></p>
         </div>
@@ -805,12 +807,22 @@
       <template x-if="trades.length === 0">
         <div class="bg-gray-900 border border-gray-800 rounded-xl py-16 text-center text-gray-600">
           <div class="text-5xl mb-3 opacity-30">??</div>
-          <div class="text-sm">No trades added yet.</div>
-          <div class="text-xs mt-1">Go to <button @click="activeTab='signals'" class="text-brand underline">Signals</button> and click "+ Trade" on any signal.</div>
+          <div class="text-sm">Signals auto-appear here once the scanner publishes them.</div>
+          <div class="text-xs mt-1">History is grouped by symbol and signal direction for the current IST day.</div>
         </div>
       </template>
 
-      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+      <div x-show="historySource === 'server'" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+        <template x-for="t in historyGroups" :key="t.id">
+          <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden row-fade" :class="t.status === 'OPEN' ? 'trade-open' : (t.status === 'SL_HIT' ? 'trade-sl' : 'trade-tg1')">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800"><div class="flex items-center gap-2"><span class="mono font-bold text-white text-sm" x-text="t.symbol"></span><span class="badge bg-gray-800 text-gray-300 border-gray-700" x-text="(t.signal_emoji || '') + ' ' + (t.signal_label || t.signal || '')"></span><span class="badge" :class="t.direction === 'BUY' ? 'bg-blue-950 text-blue-300 border-blue-800' : 'bg-orange-950 text-orange-300 border-orange-800'" x-text="t.direction === 'BUY' ? '↑ BUY' : '↓ SELL'"></span></div><span class="badge" :class="t.status === 'OPEN' ? 'bg-blue-950 text-blue-300 border-blue-800' : t.status === 'SL_HIT' ? 'bg-red-950 text-red-300 border-red-800' : 'bg-green-950 text-green-300 border-green-800'" x-text="t.status"></span></div>
+            <div class="grid grid-cols-4 gap-px bg-gray-800 text-center"><div class="bg-gray-900 px-2 py-2"><div class="text-[9px] text-gray-600">Entry</div><div class="mono text-xs lv-entry" x-text="'₹' + fmt2(t.entry)"></div></div><div class="bg-gray-900 px-2 py-2"><div class="text-[9px] text-gray-600">Current</div><div class="mono text-xs" :class="t.pnl_pct >= 0 ? 'text-green-400' : 'text-red-400'" x-text="'₹' + fmt2(t.currentLTP)"></div></div><div class="bg-gray-900 px-2 py-2"><div class="text-[9px] text-gray-600">P&amp;L</div><div class="mono text-xs" :class="t.pnl_pct >= 0 ? 'text-green-400' : 'text-red-400'" x-text="(t.pnl_pct >= 0 ? '+' : '') + t.pnl_pct.toFixed(2) + '%'"></div></div><div class="bg-gray-900 px-2 py-2"><div class="text-[9px] text-gray-600">Tier</div><div class="mono text-xs text-amber-300" x-text="t.confidence_tier || '—'"></div></div></div>
+            <div class="px-4 py-2 text-[10px] text-gray-500 flex flex-wrap gap-x-3"><span x-text="'First: ' + (t.first_seen || '—')"></span><span x-text="'Last: ' + (t.last_update || '—')"></span><span x-text="t.stability_scans + ' scans'"></span><span x-text="'Conf ' + t.confidence_min + '–' + t.confidence_max"></span><span x-text="'SL ' + fmt2(t.sl) + ' · TG1 ' + fmt2(t.tg1) + ' · TG2 ' + fmt2(t.tg2)"></span></div>
+            <div class="px-4 py-2 border-t border-gray-800"><button @click="t.expanded = !t.expanded" class="text-xs text-brand hover:text-sky-300" x-text="(t.expanded ? '▾ Hide' : '▸ Show') + ' scan history (' + t.stability_scans + ' snapshots)' "></button><div x-show="t.expanded" class="mt-2 max-h-48 overflow-y-auto scrollbar-thin space-y-1"><template x-for="(e,i) in t.timeline" :key="e.id || i"><div class="grid grid-cols-4 gap-2 text-[10px] mono text-gray-500"><span x-text="e.captured_at_ist || e.addedAt || '—'"></span><span x-text="'₹' + fmt2(e.currentLTP ?? e.ltp)"></span><span x-text="Number(e.price_change_pct ?? e.price_change ?? 0).toFixed(2) + '%'"></span><span x-text="Number(e.oi_change_pct ?? e.oi_change ?? 0).toFixed(2) + '%'"></span></div></template><div x-show="t.stability_scans > 50" class="text-[10px] text-gray-600">Showing latest 50 snapshots.</div></div></div>
+          </div>
+        </template>
+      </div>
+      <div x-show="historySource !== 'server'" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         <template x-for="t in trades" :key="t.id">
           <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden row-fade"
                :class="{
@@ -1066,7 +1078,7 @@ function scanner() {
     signals: [], totalActive: 0, signalCounts: {}, highConf: 0, mediumConf: 0, availableSectors: [],
     marketDataSource: '', dataStatus: 'NOT_RUN', newsRefreshTimer: null,
     marketOverview: null, marketOverviewError: '',
-    news: [], newsSymbol: '', newsLoading: false,
+    news: [], newsSymbol: '', newsLoading: false, newsHighOnly: false,
     intelligence: null, intelligenceLoading: false, participantOI: null,
     chainData: null, selectedSymbol: '', chainInput: '', heatmapData: null, heatmapSymbol: '', heatmapLoading: false,
     loading: false, chainLoading: false,
@@ -1074,7 +1086,7 @@ function scanner() {
     clock: '', marketOpen: false, marketStatusLabel: '',
     activeFilter: '', confidenceFilter: '', sectorFilter: '', activeTab: 'signals',
     search: '', sortBy: 'confidence',
-    trades: [], todayLabel: '', historySource: 'browser', historyPerformance: null, analyticsBreakdowns: null,
+    trades: [], historyGroups: [], todayLabel: '', historySource: 'browser', historyPerformance: null, analyticsBreakdowns: null,
     oiChart: null,
 
     /* ?? signal type metadata ?? */
@@ -1105,16 +1117,16 @@ function scanner() {
       return list;
     },
 
+    get filteredNews() { return this.newsHighOnly ? this.news.filter(item => item.event_risk === 'HIGH_EVENT_RISK') : this.news; },
     get tradeStats() {
-      if (this.historySource === 'server' && this.historyPerformance) {
-        return {
-          tg1Hit: this.historyPerformance.tp1_hits || 0,
-          tg2Hit: this.historyPerformance.tp2_hits || 0,
-          slHit: this.historyPerformance.sl_hits || 0,
-          open: this.historyPerformance.open || 0,
-          tgHit: this.historyPerformance.tp1_hits || 0,
-          winRate: this.historyPerformance.accuracy || 0,
-        };
+      if (this.historySource === 'server') {
+        const cards = this.historyGroups || [];
+        const tg1Hit = cards.filter(t => t.status === 'TG1_HIT').length;
+        const tg2Hit = cards.filter(t => t.status === 'TG2_HIT').length;
+        const slHit = cards.filter(t => t.status === 'SL_HIT').length;
+        const open = cards.filter(t => t.status === 'OPEN' || t.status === 'TG1_HIT').length;
+        const closed = cards.length - open;
+        return {tg1Hit, tg2Hit, slHit, open, tgHit: tg1Hit + tg2Hit, winRate: closed ? Math.round(((tg1Hit + tg2Hit) / closed) * 100) : 0};
       }
       const tg1Hit = this.trades.filter(t => t.status === 'TG1_HIT').length;
       const tg2Hit = this.trades.filter(t => t.status === 'TG2_HIT').length;
@@ -1288,6 +1300,19 @@ function scanner() {
       } finally { this.loading = false; }
     },
 
+    groupHistory(events) {
+      const groups = new Map();
+      (events || []).forEach(event => { const key = `${event.symbol || ''}|${event.direction || event.signal_direction || ''}`; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(event); });
+      return [...groups.values()].map(items => {
+        items.sort((a,b) => String(a.captured_at_ist || a.addedAt || '').localeCompare(String(b.captured_at_ist || b.addedAt || '')));
+        const first = items[0], last = items[items.length - 1];
+        const confidence = items.map(e => Number(e.confidence)).filter(Number.isFinite);
+        const entry = Number(first.entry || first.ltp || 0), currentLTP = Number(last.currentLTP ?? last.ltp ?? last.current_price ?? entry);
+        const direction = last.direction || last.signal_direction || 'BUY';
+        const pnl_pct = entry ? ((currentLTP-entry)/entry*100) * (direction === 'SELL' ? -1 : 1) : 0;
+        return {...last, id:`${last.symbol}-${direction}`, first_seen:first.captured_at_ist || first.addedAt, last_update:last.captured_at_ist || last.addedAt, stability_scans:items.length, confidence_min:confidence.length ? Math.min(...confidence) : 0, confidence_max:confidence.length ? Math.max(...confidence) : 0, entry, currentLTP, pnl_pct, status:last.status || 'OPEN', timeline:items.slice(-50), expanded:false};
+      });
+    },
     /* ?????? server-owned history ?????? */
     async loadServerHistory() {
       try {
@@ -1298,6 +1323,7 @@ function scanner() {
         // first persisted scan. Once it has events, it is authoritative.
         if ((data.total_events || 0) > 0) {
           this.trades = data.events || [];
+          this.historyGroups = this.groupHistory(this.trades);
           this.historyPerformance = data.performance || null;
           this.historySource = 'server';
           this.todayLabel = data.trade_date || this.todayLabel;

@@ -9,24 +9,35 @@ from typing import Any
 
 HIGH_RISK_TERMS = (
     "results", "board meeting", "buyback", "merger", "amalgamation",
-    "acquisition", "offer", "delisting", "insolvency", "resignation",
+    "acquisition", "delisting", "insolvency", "resignation",
     "fraud", "litigation", "dividend", "split", "bonus",
 )
+HIGH_RISK_PHRASES = ("open offer", "offer for sale", "buyback offer")
+MEDIUM_CATEGORY_TERMS = (
+    "scheme of arrangement", "acquisition", "delisting", "rights issue",
+    "covenant", "debt",
+)
+CAPPED_CATEGORIES = ("press release", "analysts", "institutional investor meet")
 MEDIUM_RISK_TERMS = (
     "allotment", "order", "contract", "agreement", "investor",
     "fund raise", "preferential", "credit rating", "clarification",
 )
 
 
-def classify_event_risk(text: str) -> tuple[str, list[str]]:
+def classify_event_risk(text: str, category: str = "") -> tuple[str, list[str]]:
     """Classify disclosure volatility risk, never news sentiment/direction."""
     lowered = text.lower()
+    category_lower = category.lower()
+    strong = [phrase for phrase in HIGH_RISK_PHRASES if phrase in lowered]
     high = [term for term in HIGH_RISK_TERMS if term in lowered]
-    if high:
+    if strong:
+        return "HIGH_EVENT_RISK", strong + [term for term in high if term not in strong]
+    if high and not any(category_term in category_lower for category_term in CAPPED_CATEGORIES):
         return "HIGH_EVENT_RISK", high
     medium = [term for term in MEDIUM_RISK_TERMS if term in lowered]
-    if medium:
-        return "MEDIUM_EVENT_RISK", medium
+    medium += [term for term in MEDIUM_CATEGORY_TERMS if term in category_lower and term not in medium]
+    if medium or high:
+        return "MEDIUM_EVENT_RISK", medium or high
     return "DISCLOSURE", []
 
 
@@ -40,7 +51,7 @@ def normalize_nse_announcements(rows: Iterable[Mapping[str, Any]]) -> list[dict[
         published = str(row.get("an_dt") or row.get("exchdisstime") or "").strip()
         if not symbol or not identifier or not title:
             continue
-        risk, terms = classify_event_risk(f"{row.get('desc') or ''} {title}")
+        risk, terms = classify_event_risk(f"{row.get('desc') or ''} {title}", str(row.get("desc") or ""))
         normalized.append({
             "announcement_id": identifier,
             "symbol": symbol,
