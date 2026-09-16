@@ -59,6 +59,7 @@ from analytics.intraday import candle_vwap
 from analytics.technical import ema as calculate_ema
 from collector.bhavcopy import collect_equity_bhavcopy
 from collector.backfill import backfill_recent_bhavcopies
+from collector.index_backfill import backfill_index_bars
 from collector.participant_oi import collect_participant_oi
 from signal_engine.quality import apply_daily_technical_context, apply_intraday_observation_context
 from analytics.market_overview import normalize_market_overview
@@ -167,9 +168,9 @@ def _refresh_signals() -> list[dict]:
     ]
     if signals:
         try:
-            bars_by_symbol = repository.daily_equity_bars_for_symbols(
-                (str(signal.get("symbol") or "") for signal in signals)
-            )
+            symbols = [str(signal.get("symbol") or "") for signal in signals]
+            bars_by_symbol = repository.daily_equity_bars_for_symbols(symbols)
+            bars_by_symbol.update(repository.daily_index_bars_for_symbols(symbols))
             signals = [
                 apply_daily_technical_context(
                     signal,
@@ -363,9 +364,20 @@ async def ingest_participant_oi(report_date: str | None = None) -> int:
     return 0
 
 
+async def ingest_daily_index_bars() -> int:
+    """Append the latest public NSE daily OHLC rows for the four F&O indices."""
+    try:
+        result = await asyncio.to_thread(backfill_index_bars, repository, days=2, max_downloads=2)
+        return int(result.get("stored", 0))
+    except Exception:
+        logger.exception("Daily NSE index-bar ingestion failed")
+        return 0
+
+
 async def scheduled_bhavcopy_ingestion() -> None:
-    """Try NSE's completed daily bhavcopy after the regular market session."""
+    """Try NSE's completed daily equity and index data after market close."""
     await ingest_daily_bhavcopy()
+    await ingest_daily_index_bars()
 
 
 def _backfill_end_date() -> date:
@@ -489,12 +501,14 @@ async def lifespan(app: FastAPI):
     app.state.scheduler = scheduler
     gc.freeze()
     # Render Free has an ephemeral filesystem; run one bounded backfill without
-    # blocking health/startup, then expose the state through /api/health.
+    # blocking health/startup. The deployment setting controls whether it runs.
     if repository.daily_equity_bar_summary().get("bars", 0) == 0:
         if settings.startup_backfill and render_startup_backfill_enabled():
             asyncio.create_task(automatic_startup_backfill())
         else:
             logger.warning("Daily bhavcopy history is empty and automatic backfill is disabled.")
+    if repository.daily_index_bar_summary().get("bars", 0) == 0 and os.getenv("NSE_OI_INDEX_BACKFILL", "0").lower() not in {"0", "false", "no"}:
+        asyncio.create_task(asyncio.to_thread(backfill_index_bars, repository, days=60, max_downloads=60))
     # A newly deployed year is unknown until NSE's public calendar loads.
     # Await only in that case: normal startup stays local and fast.
     if not has_holiday_calendar_for_year(now_ist().year):
@@ -542,6 +556,7 @@ async def health():
     now = now_ist()
     status = get_market_status(now)
     daily_equity_data = repository.daily_equity_bar_summary()
+    daily_index_data = repository.daily_index_bar_summary()
     return {
         "status":        "ok",
         "time_ist":      now.strftime("%Y-%m-%d %H:%M:%S IST"),
@@ -557,6 +572,8 @@ async def health():
         "holiday_calendar": holiday_calendar_metadata(),
         "daily_equity_data": daily_equity_data,
         "bhavcopy_backfill_required": daily_equity_data.get("bars", 0) == 0,
+        "daily_index_data": daily_index_data,
+        "index_backfill_required": daily_index_data.get("bars", 0) == 0,
     }
 
 

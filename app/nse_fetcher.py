@@ -470,6 +470,34 @@ def fetch_participant_oi_report(trade_date: date) -> str | None:
     )
 
 
+def fetch_index_history(index_type: str, from_date: date, to_date: date) -> list[dict]:
+    """Fetch and normalize public NSE historical index OHLC rows."""
+    encoded = quote(index_type, safe="")
+    data = _nse.get(f"{NSE_BASE}/api/historical/indicesHistory?indexType={encoded}&from={from_date:%d-%m-%Y}&to={to_date:%d-%m-%Y}", referer=f"{NSE_BASE}/market-data/historical-indices") or {}
+    raw = data.get("data") if isinstance(data, dict) else []
+    if isinstance(raw, dict):
+        rows = raw.get("indexCloseOnlineRecords") or raw.get("data") or raw.get("records") or []
+    else:
+        rows = raw or []
+    out=[]
+    for row in rows or []:
+        def val(*keys):
+            for key in keys:
+                if row.get(key) not in (None, "", "-"): return row.get(key)
+            return None
+        raw_date=val("EOD_TIMESTAMP","TIMESTAMP","date","Date")
+        raw_date = str(raw_date or "").replace(" ", "-")
+        try: trade_date=datetime.strptime(str(raw_date)[:10], "%d-%b-%Y").date()
+        except ValueError:
+            try: trade_date=date.fromisoformat(str(raw_date)[:10])
+            except ValueError: continue
+        try:
+            values=[float(val(*keys) or 0) for keys in (("EOD_OPEN_INDEX_VAL","OPEN_INDEX_VAL","open"),("EOD_HIGH_INDEX_VAL","HIGH_INDEX_VAL","high"),("EOD_LOW_INDEX_VAL","LOW_INDEX_VAL","low"),("EOD_CLOSE_INDEX_VAL","CLOSE_INDEX_VAL","close"))]
+        except (TypeError,ValueError): continue
+        if values[-1] > 0: out.append({"trade_date":trade_date.isoformat(),"open":values[0],"high":values[1],"low":values[2],"close":values[3]})
+    return out
+
+
 def fetch_market_indices() -> dict | None:
     """Fetch the public NSE broad-index feed, including INDIA VIX/breadth."""
     return _nse.get(

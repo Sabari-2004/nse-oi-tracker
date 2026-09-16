@@ -110,6 +110,16 @@ class SignalRepository:
                 CREATE INDEX IF NOT EXISTS idx_daily_equity_symbol_date
                     ON daily_equity_bars(symbol, trade_date DESC);
 
+                CREATE TABLE IF NOT EXISTS daily_index_bars (
+                    trade_date TEXT NOT NULL, symbol TEXT NOT NULL,
+                    open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL,
+                    close REAL NOT NULL, source TEXT NOT NULL DEFAULT 'nse_index_history',
+                    ingested_at_utc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(trade_date, symbol)
+                );
+                CREATE INDEX IF NOT EXISTS idx_daily_index_symbol_date
+                    ON daily_index_bars(symbol, trade_date DESC);
+
                 CREATE TABLE IF NOT EXISTS option_chain_snapshots (
                     id INTEGER PRIMARY KEY,
                     symbol TEXT NOT NULL,
@@ -216,6 +226,27 @@ class SignalRepository:
                 rows,
             )
         return len(rows)
+
+
+    def upsert_daily_index_bars(self, bars: Iterable[dict[str, Any]]) -> int:
+        rows = [(str(b.get("trade_date") or ""), str(b.get("symbol") or "").upper(), float(b.get("open") or 0), float(b.get("high") or 0), float(b.get("low") or 0), float(b.get("close") or 0)) for b in bars if b.get("trade_date") and b.get("symbol") and float(b.get("close") or 0) > 0]
+        with self._connect() as con:
+            con.executemany("INSERT INTO daily_index_bars(trade_date,symbol,open,high,low,close) VALUES(?,?,?,?,?,?) ON CONFLICT(trade_date,symbol) DO UPDATE SET open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,ingested_at_utc=CURRENT_TIMESTAMP", rows)
+        return len(rows)
+
+    def daily_index_bars_for_symbols(self, symbols: Iterable[str], *, limit_per_symbol: int = 90) -> dict[str, list[dict[str, Any]]]:
+        names = sorted({str(x).upper().strip() for x in symbols if str(x).strip()})
+        if not names: return {}
+        q = ",".join("?" for _ in names)
+        with self._connect() as con:
+            rows = con.execute(f"SELECT symbol,trade_date,open,high,low,close,NULL AS volume FROM (SELECT symbol,trade_date,open,high,low,close,ROW_NUMBER() OVER(PARTITION BY symbol ORDER BY trade_date DESC) AS n FROM daily_index_bars WHERE symbol IN ({q})) WHERE n<=? ORDER BY symbol,trade_date", (*names, limit_per_symbol)).fetchall()
+        result={x:[] for x in names}
+        for row in rows: result[str(row["symbol"])].append(dict(row))
+        return result
+
+    def daily_index_bar_summary(self) -> dict[str, Any]:
+        with self._connect() as con:
+            return dict(con.execute("SELECT COUNT(*) AS bars, COUNT(DISTINCT symbol) AS symbols, MAX(trade_date) AS latest_trade_date FROM daily_index_bars").fetchone())
 
     def daily_equity_bars_for_symbol(self, symbol: str, *, limit: int = 90) -> list[dict[str, Any]]:
         """Return a chronological, bounded daily NSE-bar series for one ticker."""

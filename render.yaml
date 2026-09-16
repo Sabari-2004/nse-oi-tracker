@@ -21,6 +21,10 @@ services:
         value: "1"
       - key: DEBUG_TOKEN
         generateValue: true
+      - key: NSE_OI_AUTO_BACKFILL
+        value: "1"
+      - key: NSE_OI_INDEX_BACKFILL
+        value: "1"
 
 # Render Free web services have an ephemeral filesystem. The app remains
 # usable, but its local SQLite history resets on restart, redeploy, or idle
