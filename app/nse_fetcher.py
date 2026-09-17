@@ -72,10 +72,10 @@ NAV_EXTRA = {
     "Upgrade-Insecure-Requests": "1",
 }
 
-# Seed pages visited on session startup (home primes cookies, derivatives primes market context)
+# Seed pages visited on session startup (derivatives watch and option chain set full market cookies)
 SEED_PAGES = [
-    ("https://www.nseindia.com/", ""),
-    ("https://www.nseindia.com/market-data/equity-derivatives-watch", "https://www.nseindia.com/"),
+    ("https://www.nseindia.com/market-data/equity-derivatives-watch", "https://www.google.com/"),
+    ("https://www.nseindia.com/option-chain", "https://www.nseindia.com/market-data/equity-derivatives-watch"),
 ]
 
 
@@ -88,7 +88,7 @@ class NSESession:
     before any cookie or JavaScript challenge is even considered.
 
     Session lifecycle:
-    - Built on first use (visits home + derivatives page)
+    - Built on first use (visits derivatives page + option chain)
     - Auto-refreshed every SESSION_REFRESH_SECONDS (10 min)
     - Re-seeded on 401/403/429 with 45s cooldown to prevent rebuild storms
     """
@@ -113,30 +113,33 @@ class NSESession:
         logger.info("Building NSE Chrome-impersonation session...")
         sess = self._new_session()
 
+        seeded_ok = False
         for url, referer in SEED_PAGES:
             nav_headers = {**NAV_EXTRA}
             if referer:
                 nav_headers["Referer"] = referer
-                nav_headers["Sec-Fetch-Site"] = "same-origin"
+                nav_headers["Sec-Fetch-Site"] = "cross-site" if "google" in referer else "same-origin"
             else:
                 nav_headers["Sec-Fetch-Site"] = "none"
             try:
                 r = sess.get(url, headers=nav_headers, timeout=20)
                 logger.info(f"  seed {r.status_code} {url}")
-                if r.status_code != 200:
-                    logger.warning(f"  seed {url} returned {r.status_code}; aborting seed early")
-                    return sess if sess.cookies else None
+                if r.status_code == 200:
+                    seeded_ok = True
             except Exception as e:
                 logger.warning(f"  seed failed {url}: {e}")
-                return sess if sess.cookies else None
             time.sleep(1.5)
 
         # Clear navigation-only headers from session base
         for h in ("Upgrade-Insecure-Requests", "Sec-Fetch-User", "Cache-Control", "Pragma", "Sec-Fetch-Dest", "Sec-Fetch-Mode", "Sec-Fetch-Site"):
             sess.headers.pop(h, None)
         sess.headers.update(BASE_HEADERS)
-        logger.info("NSE session ready (Chrome TLS fingerprint).")
-        return sess
+
+        if seeded_ok or sess.cookies:
+            logger.info("NSE session ready (Chrome TLS fingerprint).")
+            return sess
+        logger.warning("NSE session seeding failed to acquire cookies.")
+        return None
 
     def _ensure(self):
         """Rebuild session if missing or older than SESSION_REFRESH_SECONDS."""
