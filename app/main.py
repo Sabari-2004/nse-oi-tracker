@@ -744,9 +744,11 @@ async def oi_signals(
 
     cached = cache.get("all_signals")
 
-    # If cache empty AND market open ? force fresh scan (don't serve stale empty)
-    if (cached is None or len(cached) == 0) and is_market_open():
-        logger.info("Cache empty during market hours ? fresh scan")
+    # Only a missing cache needs a blocking scan. An empty list is a valid,
+    # successful quiet-market result; refreshing it on every request made the
+    # dashboard wait for another full NSE round-trip whenever no signal passed.
+    if cached is None and is_market_open():
+        logger.info("Signal cache missing during market hours - fresh scan")
         cached = await refresh_signals()
 
     if cached is None:

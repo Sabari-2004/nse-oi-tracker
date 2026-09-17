@@ -13,6 +13,11 @@ def test_manual_refresh_bypasses_signal_market_and_news_caches():
     assert "newsRefreshTimer = setInterval(() => this.fetchNews(true), 180000)" in INDEX
 
 
+def test_empty_successful_signal_scan_does_not_force_another_upstream_fetch():
+    assert "if cached is None and is_market_open():" in MAIN
+    assert "cached is None or len(cached) == 0" not in MAIN
+
+
 def test_news_endpoint_supports_explicit_upstream_refresh():
     assert "async def corporate_news" in MAIN
     assert "if refresh:" in MAIN
