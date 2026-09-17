@@ -28,6 +28,16 @@ from app.config import SESSION_REFRESH_SECONDS
 logger   = logging.getLogger(__name__)
 NSE_BASE = "https://www.nseindia.com"
 
+
+def _proxy_kwargs() -> dict[str, str]:
+    """Return curl-cffi proxy settings without logging the proxy credential."""
+    proxy = os.getenv("NSE_OI_PROXY_URL", "").strip()
+    if not proxy:
+        return {}
+    if not proxy.startswith(("http://", "https://", "socks5://", "socks5h://")):
+        raise ValueError("NSE_OI_PROXY_URL must be an HTTP(S) or SOCKS5 URL")
+    return {"http": proxy, "https": proxy}
+
 # Chrome impersonation target (curl-cffi supports many versions)
 CHROME = "chrome120"
 
@@ -99,6 +109,9 @@ class NSESession:
         """Create a fresh curl-cffi session impersonating Chrome."""
         s = cffi_requests.Session(impersonate=CHROME)
         s.headers.update(BASE_HEADERS)
+        proxies = _proxy_kwargs()
+        if proxies:
+            s.proxies.update(proxies)
         return s
 
     def _build(self):
@@ -217,7 +230,11 @@ class NSESession:
         headers = {**BASE_HEADERS, "Referer": referer, "Accept": "text/csv,text/plain,*/*"}
         for attempt in range(retries):
             try:
-                response = cffi_requests.get(url, headers=headers, impersonate=CHROME, timeout=25)
+                request_kwargs = {"headers": headers, "impersonate": CHROME, "timeout": 25}
+                proxies = _proxy_kwargs()
+                if proxies:
+                    request_kwargs["proxies"] = proxies
+                response = cffi_requests.get(url, **request_kwargs)
                 if response.status_code == 200 and response.content:
                     return response.text
                 logger.warning("HTTP %s fetching archive %s", response.status_code, url)
