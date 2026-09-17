@@ -463,8 +463,8 @@ async def scheduled_bhavcopy_ingestion() -> None:
 
 
 def _backfill_end_date() -> date:
-    """Use the latest completed IST calendar day as the backfill boundary."""
-    return now_ist().date() - timedelta(days=1)
+    """Use the latest expected published bhavcopy date as the backfill boundary."""
+    return expected_latest_bhavcopy_date()
 
 
 async def run_backfill(*, required_days: int = 60, max_downloads: int = 60) -> dict[str, object]:
