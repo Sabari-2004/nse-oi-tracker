@@ -58,7 +58,7 @@ from analytics.intraday import observe as observe_intraday
 from analytics.intraday import candle_vwap
 from analytics.technical import ema as calculate_ema
 from collector.bhavcopy import collect_equity_bhavcopy
-from collector.backfill import backfill_recent_bhavcopies
+from collector.backfill import backfill_recent_bhavcopies, recent_nse_trading_dates
 from collector.index_backfill import backfill_index_bars
 from app.database_backup import restore_latest_backup, upload_database_snapshot
 from collector.participant_oi import collect_participant_oi
@@ -119,6 +119,31 @@ def is_market_open() -> bool:
     knows about holidays too.
     """
     return get_market_status() == MARKET_STATUS_OPEN
+
+
+def expected_latest_bhavcopy_date(now: datetime | None = None) -> date:
+    """Return the latest NSE date whose daily bhavcopy should be available.
+
+    NSE's daily file is published after the trading day. Before 18:30 IST,
+    absence of today's file is normal, so health checks expect the previous
+    known trading date. After that cutoff, today's file is expected.
+    """
+    observed_at = (now or now_ist()).astimezone(IST)
+    candidate = observed_at.date()
+    if (observed_at.hour, observed_at.minute) < (18, 30):
+        candidate -= timedelta(days=1)
+    return recent_nse_trading_dates(candidate, 1)[0]
+
+
+def bhavcopy_backfill_required(
+    summary: dict[str, object], now: datetime | None = None
+) -> bool:
+    """Report stale or empty daily equity history as requiring backfill."""
+    bars = int(summary.get("bars") or 0)
+    latest_trade_date = summary.get("latest_trade_date")
+    if bars == 0 or not latest_trade_date:
+        return True
+    return str(latest_trade_date) < expected_latest_bhavcopy_date(now).isoformat()
 
 
 def _refresh_signals() -> list[dict]:
@@ -613,7 +638,7 @@ async def health():
         "last_snapshot_id": _last_snapshot_id,
         "holiday_calendar": holiday_calendar_metadata(),
         "daily_equity_data": daily_equity_data,
-        "bhavcopy_backfill_required": daily_equity_data.get("bars", 0) == 0,
+        "bhavcopy_backfill_required": bhavcopy_backfill_required(daily_equity_data, now),
         "daily_index_data": daily_index_data,
         "index_backfill_required": daily_index_data.get("bars", 0) == 0,
     }

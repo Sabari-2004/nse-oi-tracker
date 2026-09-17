@@ -7,6 +7,19 @@ from database.repository import SignalRepository
 from utils.time import IST
 
 
+def test_bhavcopy_backfill_required_tracks_expected_trading_date():
+    before_publish = datetime(2026, 9, 17, 17, 0, tzinfo=IST)
+    after_publish = datetime(2026, 9, 17, 18, 30, tzinfo=IST)
+    stale = {"bars": 100, "latest_trade_date": "2026-09-15"}
+    previous = {"bars": 100, "latest_trade_date": "2026-09-16"}
+    current = {"bars": 100, "latest_trade_date": "2026-09-17"}
+
+    assert main.bhavcopy_backfill_required(stale, before_publish) is True
+    assert main.bhavcopy_backfill_required(previous, before_publish) is False
+    assert main.bhavcopy_backfill_required(previous, after_publish) is True
+    assert main.bhavcopy_backfill_required(current, after_publish) is False
+
+
 def test_history_and_analytics_are_served_from_sqlite(monkeypatch, tmp_path):
     repository = SignalRepository(tmp_path / "tracker.sqlite3")
     captured_at = datetime.now(IST)

@@ -25,6 +25,13 @@ services:
         value: "1"
       - key: NSE_OI_INDEX_BACKFILL
         value: "1"
+      # Configure these in Render's dashboard; never commit their values.
+      - key: NSE_OI_BACKUP_URL
+        sync: false
+      - key: NSE_OI_BACKUP_TOKEN
+        sync: false
+      - key: NSE_OI_PROXY_URL
+        sync: false
 
 # Render Free web services have an ephemeral filesystem. The app remains
 # usable, but its local SQLite history resets on restart, redeploy, or idle
