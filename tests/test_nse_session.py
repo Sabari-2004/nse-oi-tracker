@@ -65,3 +65,29 @@ def test_public_fetchers_use_seeded_option_chain_and_derivative_paths(monkeypatc
 
     assert nse_fetcher.fetch_option_chain_index("NIFTY") == {"data": []}
     assert seen[0][0] == "get"
+
+
+def test_proxy_is_applied_to_archive_requests(monkeypatch):
+    monkeypatch.setenv("NSE_OI_PROXY_URL", "socks5h://proxy.example:1080")
+    seen = {}
+
+    def get(url, **kwargs):
+        seen.update(kwargs)
+        return FakeResponse(200, "csv", content_type="text/csv")
+
+    monkeypatch.setattr(nse_fetcher.cffi_requests, "get", get)
+    assert nse_fetcher.NSESession().get_archive_text("https://nse.test/file.csv", "https://nse.test/") == '"csv"'
+    assert seen["proxies"] == {
+        "http": "socks5h://proxy.example:1080",
+        "https": "socks5h://proxy.example:1080",
+    }
+
+
+def test_invalid_proxy_url_is_rejected(monkeypatch):
+    monkeypatch.setenv("NSE_OI_PROXY_URL", "file:///tmp/proxy")
+    try:
+        nse_fetcher.NSESession()._new_session()
+    except ValueError as exc:
+        assert "NSE_OI_PROXY_URL" in str(exc)
+    else:
+        raise AssertionError("invalid proxy URL should be rejected")
