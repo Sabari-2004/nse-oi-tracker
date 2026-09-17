@@ -91,3 +91,11 @@ def test_invalid_proxy_url_is_rejected(monkeypatch):
         assert "NSE_OI_PROXY_URL" in str(exc)
     else:
         raise AssertionError("invalid proxy URL should be rejected")
+
+
+def test_placeholder_proxy_url_is_ignored(monkeypatch):
+    monkeypatch.setenv(
+        "NSE_OI_PROXY_URL",
+        "http://user:password@india-residential-proxy:port",
+    )
+    assert nse_fetcher._proxy_kwargs() == {}

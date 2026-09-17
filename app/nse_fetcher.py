@@ -34,6 +34,12 @@ def _proxy_kwargs() -> dict[str, str]:
     proxy = os.getenv("NSE_OI_PROXY_URL", "").strip()
     if not proxy:
         return {}
+    if proxy in {
+        "http://user:password@india-residential-proxy:port",
+        "socks5h://user:password@india-residential-proxy:port",
+    }:
+        logger.warning("Ignoring placeholder NSE_OI_PROXY_URL; configure a real proxy URL")
+        return {}
     if not proxy.startswith(("http://", "https://", "socks5://", "socks5h://")):
         raise ValueError("NSE_OI_PROXY_URL must be an HTTP(S) or SOCKS5 URL")
     return {"http": proxy, "https": proxy}
