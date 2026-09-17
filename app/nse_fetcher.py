@@ -24,7 +24,7 @@ from urllib.parse import quote
 from datetime import date, datetime
 from curl_cffi import requests as cffi_requests
 from app.config import SESSION_REFRESH_SECONDS
-
+from utils.time import now_ist
 logger   = logging.getLogger(__name__)
 NSE_BASE = "https://www.nseindia.com"
 
@@ -358,7 +358,7 @@ def _stored_previous_close(symbol: str, *, today: date | None = None) -> float |
         if not row or float(row[1] or 0) <= 0:
             return None
         trade_date = date.fromisoformat(str(row[0]))
-        reference_date = today or date.today()
+        reference_date = today or now_ist().date()
         age_days = (reference_date - trade_date).days
         if age_days > PREVIOUS_CLOSE_MAX_AGE_DAYS or age_days < 0:
             logger.warning("Ignoring invalid previous close for %s: %s", symbol, trade_date)

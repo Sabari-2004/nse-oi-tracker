@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import app.nse_fetcher as nse_fetcher
+from utils.time import IST
 
 SPURTS_URL_SUFFIX = "live-analysis-oi-spurts-underlyings"
 ALL_INDICES_URL_SUFFIX = "api/allIndices"
@@ -78,6 +79,16 @@ def _stub_get(monkeypatch, spurts_payload: dict, all_indices_payload: dict | Non
 def test_stored_previous_close_returns_recent_bar(price_env):
     _seed_bars(price_env, [(date.today().isoformat(), "RELIANCE", 2400.5)])
     assert nse_fetcher._stored_previous_close("reliance") == 2400.5
+
+
+def test_stored_previous_close_uses_ist_date_before_utc_rollover(price_env, monkeypatch):
+    _seed_bars(price_env, [("2026-09-17", "RELIANCE", 2400.5)])
+    monkeypatch.setattr(
+        nse_fetcher,
+        "now_ist",
+        lambda: nse_fetcher.datetime(2026, 9, 17, 0, 15, tzinfo=IST),
+    )
+    assert nse_fetcher._stored_previous_close("RELIANCE") == 2400.5
 
 
 def test_stored_previous_close_accepts_a_few_days_old(price_env):
