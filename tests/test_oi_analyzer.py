@@ -40,6 +40,19 @@ def test_cas_signal_constant_is_available():
     assert SIGNAL_CAS_SHORT_COVERING == "CAS_SHORT_COVERING"
 
 
+def test_option_chain_error_distinguishes_closed_market(monkeypatch):
+    from app import oi_analyzer
+
+    monkeypatch.setattr(oi_analyzer, "fetch_option_chain_index", lambda symbol: None)
+    monkeypatch.setattr(oi_analyzer, "get_market_status", lambda: "CLOSED_BEFORE_OPEN")
+
+    result = oi_analyzer.get_option_chain_analysis("NIFTY")
+
+    assert result["error_code"] == "MARKET_CLOSED"
+    assert "market is closed" in result["error"]
+    assert "IP" not in result["error"]
+
+
 def test_oi_change_fallback_is_used_when_percent_missing():
     from app import oi_analyzer
     row = {
