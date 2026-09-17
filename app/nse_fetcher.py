@@ -47,19 +47,10 @@ def _proxy_kwargs() -> dict[str, str]:
 # Chrome impersonation target (curl-cffi supports many versions)
 CHROME = "chrome120"
 
-# Base headers for all requests (realistic Chrome headers)
+# Base headers for all requests (clean, realistic Chrome headers)
 BASE_HEADERS = {
-    "Accept-Language":           "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding":           "gzip, deflate, br",
-    "Cache-Control":             "no-cache",
-    "Pragma":                    "no-cache",
-    "Sec-Ch-Ua":                 '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-    "Sec-Ch-Ua-Mobile":         "?0",
-    "Sec-Ch-Ua-Platform":       '"Windows"',
-    "Upgrade-Insecure-Requests": "1",
-    "User-Agent":                ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                  "Chrome/120.0.0.0 Safari/537.36"),
+    "Accept-Language": "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
 }
 
 # JSON API-specific headers (added on top of BASE_HEADERS for API calls)
@@ -71,24 +62,20 @@ API_EXTRA = {
     "Sec-Fetch-Site":   "same-origin",
 }
 
-# Page navigation headers (for seed visits ? looks like a real browser navigation)
+# Page navigation headers (for seed visits - natural browser navigation)
 NAV_EXTRA = {
-    "Accept":         "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept":         "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Sec-Fetch-Dest": "document",
     "Sec-Fetch-Mode": "navigate",
     "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
 }
 
-# Seed pages visited on session startup
+# Seed pages visited on session startup (home primes cookies, derivatives primes market context)
 SEED_PAGES = [
-    ("https://www.nseindia.com/",
-     "https://www.google.com/"),
-    ("https://www.nseindia.com/market-data/live-equity-market",
-     "https://www.nseindia.com/"),
-    ("https://www.nseindia.com/market-data/equity-derivatives-watch",
-     "https://www.nseindia.com/market-data/live-equity-market"),
-    ("https://www.nseindia.com/option-chain",
-     "https://www.nseindia.com/market-data/equity-derivatives-watch"),
+    ("https://www.nseindia.com/", ""),
+    ("https://www.nseindia.com/market-data/equity-derivatives-watch", "https://www.nseindia.com/"),
 ]
 
 
@@ -101,15 +88,16 @@ class NSESession:
     before any cookie or JavaScript challenge is even considered.
 
     Session lifecycle:
-    - Built on first use (visits 4 seed pages with 2s delays)
+    - Built on first use (visits home + derivatives page)
     - Auto-refreshed every SESSION_REFRESH_SECONDS (10 min)
-    - Re-seeded on 401/403/429 (stale cookies)
+    - Re-seeded on 401/403/429 with 45s cooldown to prevent rebuild storms
     """
 
     def __init__(self):
-        self._sess      = None
-        self._lock      = RLock()
-        self._last_init = 0.0
+        self._sess                 = None
+        self._lock                 = RLock()
+        self._last_init            = 0.0
+        self._last_rebuild_attempt = 0.0
 
     def _new_session(self) -> cffi_requests.Session:
         """Create a fresh curl-cffi session impersonating Chrome."""
@@ -122,19 +110,30 @@ class NSESession:
 
     def _build(self):
         """Seed a new session by visiting NSE pages in browser-like order."""
-        logger.info("Building NSE Chrome-impersonation session?")
+        logger.info("Building NSE Chrome-impersonation session...")
         sess = self._new_session()
 
         for url, referer in SEED_PAGES:
-            sess.headers.update({**NAV_EXTRA, "Referer": referer})
+            nav_headers = {**NAV_EXTRA}
+            if referer:
+                nav_headers["Referer"] = referer
+                nav_headers["Sec-Fetch-Site"] = "same-origin"
+            else:
+                nav_headers["Sec-Fetch-Site"] = "none"
             try:
-                r = sess.get(url, timeout=20)
+                r = sess.get(url, headers=nav_headers, timeout=20)
                 logger.info(f"  seed {r.status_code} {url}")
+                if r.status_code != 200:
+                    logger.warning(f"  seed {url} returned {r.status_code}; aborting seed early")
+                    return sess if sess.cookies else None
             except Exception as e:
                 logger.warning(f"  seed failed {url}: {e}")
-            time.sleep(2.2)
+                return sess if sess.cookies else None
+            time.sleep(1.5)
 
-        # Reset to base headers after seeding
+        # Clear navigation-only headers from session base
+        for h in ("Upgrade-Insecure-Requests", "Sec-Fetch-User", "Cache-Control", "Pragma", "Sec-Fetch-Dest", "Sec-Fetch-Mode", "Sec-Fetch-Site"):
+            sess.headers.pop(h, None)
         sess.headers.update(BASE_HEADERS)
         logger.info("NSE session ready (Chrome TLS fingerprint).")
         return sess
@@ -143,8 +142,11 @@ class NSESession:
         """Rebuild session if missing or older than SESSION_REFRESH_SECONDS."""
         now = time.time()
         if self._sess is None or (now - self._last_init) > SESSION_REFRESH_SECONDS:
-            self._sess      = self._build()
-            self._last_init = time.time()
+            new_sess = self._build()
+            if new_sess is not None:
+                self._sess = new_sess
+                self._last_init = time.time()
+                self._last_rebuild_attempt = time.time()
 
     def _safe_json(self, resp, label: str):
         """Parse JSON from response. Returns None if body is empty or HTML."""
@@ -169,6 +171,10 @@ class NSESession:
 
     def _api_get(self, url: str, referer: str):
         """Raw API GET with JSON headers. Must hold lock."""
+        if self._sess is None:
+            return None
+        for h in ("Upgrade-Insecure-Requests", "Sec-Fetch-User", "Cache-Control", "Pragma"):
+            self._sess.headers.pop(h, None)
         self._sess.headers.update({**BASE_HEADERS, **API_EXTRA, "Referer": referer})
         try:
             return self._sess.get(url, timeout=25)
@@ -178,9 +184,16 @@ class NSESession:
 
     def _nav_get(self, url: str, referer: str):
         """Raw navigation GET (page visit). Must hold lock."""
-        self._sess.headers.update({**BASE_HEADERS, **NAV_EXTRA, "Referer": referer})
+        if self._sess is None:
+            return None
+        nav_headers = {**NAV_EXTRA}
+        if referer:
+            nav_headers["Referer"] = referer
+            nav_headers["Sec-Fetch-Site"] = "same-origin"
+        else:
+            nav_headers["Sec-Fetch-Site"] = "none"
         try:
-            return self._sess.get(url, timeout=20)
+            return self._sess.get(url, headers=nav_headers, timeout=20)
         except Exception as e:
             logger.warning(f"Nav error {url}: {e}")
             return None
@@ -191,6 +204,8 @@ class NSESession:
         """Standard JSON API fetch with auto-retry on 4xx."""
         with self._lock:
             self._ensure()
+            if self._sess is None:
+                return None
             for attempt in range(retries):
                 resp = self._api_get(url, referer)
                 if resp is None:
@@ -201,8 +216,13 @@ class NSESession:
                     return self._safe_json(resp, url)
                 if code in (401, 403, 429):
                     logger.warning(f"HTTP {code} attempt {attempt+1} ? rebuilding session: {url}")
-                    self._sess      = self._build()
-                    self._last_init = time.time()
+                    now = time.time()
+                    if (now - self._last_rebuild_attempt) > 45:
+                        self._last_rebuild_attempt = now
+                        new_sess = self._build()
+                        if new_sess is not None:
+                            self._sess = new_sess
+                            self._last_init = time.time()
                     time.sleep(self._retry_delay(attempt + 1))
                 elif code == 404:
                     logger.warning(f"HTTP 404 (endpoint removed): {url}")
@@ -282,14 +302,24 @@ class NSESession:
                     if data is not None:
                         return data
                     # 200 but HTML ? session stale, rebuild
-                    logger.warning("200 but HTML body ? rebuilding session")
-                    self._sess      = self._build()
-                    self._last_init = time.time()
+                    logger.warning("200 but HTML body ? checking session rebuild")
+                    now = time.time()
+                    if (now - self._last_rebuild_attempt) > 45:
+                        self._last_rebuild_attempt = now
+                        new_sess = self._build()
+                        if new_sess is not None:
+                            self._sess = new_sess
+                            self._last_init = time.time()
                     time.sleep(self._retry_delay(attempt + 1))
                 elif code in (401, 403, 429):
-                    logger.warning(f"HTTP {code} option-chain attempt {attempt+1} ? rebuilding")
-                    self._sess      = self._build()
-                    self._last_init = time.time()
+                    logger.warning(f"HTTP {code} option-chain attempt {attempt+1} ? checking rebuild")
+                    now = time.time()
+                    if (now - self._last_rebuild_attempt) > 45:
+                        self._last_rebuild_attempt = now
+                        new_sess = self._build()
+                        if new_sess is not None:
+                            self._sess = new_sess
+                            self._last_init = time.time()
                     time.sleep(self._retry_delay(attempt + 1))
                 elif code == 404:
                     logger.warning(f"HTTP 404 option-chain: {api_url}")
@@ -356,11 +386,14 @@ def _previous_close_database_path() -> Path:
 def _stored_previous_close(symbol: str, *, today: date | None = None) -> float | None:
     """Read a recent NSE bhavcopy close; reject stale data as unsafe."""
     try:
-        with sqlite3.connect(_previous_close_database_path()) as con:
+        con = sqlite3.connect(_previous_close_database_path())
+        try:
             row = con.execute(
                 "SELECT trade_date, close FROM daily_equity_bars WHERE symbol=? ORDER BY trade_date DESC LIMIT 1",
                 (symbol.upper().strip(),),
             ).fetchone()
+        finally:
+            con.close()
         if not row or float(row[1] or 0) <= 0:
             return None
         trade_date = date.fromisoformat(str(row[0]))

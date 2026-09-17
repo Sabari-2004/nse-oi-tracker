@@ -77,8 +77,11 @@ def restore_latest_backup(database_path: Path) -> bool:
         try:
             with gzip.GzipFile(fileobj=__import__("io").BytesIO(payload)) as source, open(temporary_path, "wb") as target:
                 shutil.copyfileobj(source, target)
-            with sqlite3.connect(temporary_path) as connection:
+            connection = sqlite3.connect(temporary_path)
+            try:
                 connection.execute("PRAGMA integrity_check")
+            finally:
+                connection.close()
             database_path.parent.mkdir(parents=True, exist_ok=True)
             os.replace(temporary_path, database_path)
         finally:

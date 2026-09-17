@@ -10,7 +10,10 @@ import io
 import os
 import gc
 import ctypes
-import resource
+try:
+    import resource
+except ImportError:
+    resource = None
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -648,7 +651,7 @@ async def health():
         "market_status_label": MARKET_STATUS_LABELS[status],
         "version":       APP_VERSION,
         "database":       "ready",
-        "memory_rss_mb":  round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2),
+        "memory_rss_mb":  round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2) if resource else 0.0,
         "last_refresh_at_ist": _last_refresh_at_ist,
         "last_refresh_was_stale": _last_refresh_was_stale,
         "last_snapshot_id": _last_snapshot_id,

@@ -12,19 +12,19 @@ services:
       - key: PYTHON_VERSION
         value: 3.11.11
       - key: NSE_OI_POLL_INTERVAL_SECONDS
-        value: "60"
+        value: "120"
       - key: NSE_OI_CACHE_TTL_SECONDS
         value: "60"
       - key: NSE_OI_HISTORY_RETENTION_DAYS
         value: "30"
       - key: NSE_OI_STARTUP_BACKFILL
-        value: "1"
+        value: "0"
       - key: DEBUG_TOKEN
         generateValue: true
       - key: NSE_OI_AUTO_BACKFILL
-        value: "1"
+        value: "0"
       - key: NSE_OI_INDEX_BACKFILL
-        value: "1"
+        value: "0"
       # Configure these in Render's dashboard; never commit their values.
       - key: NSE_OI_BACKUP_URL
         sync: false
