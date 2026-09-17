@@ -676,7 +676,12 @@ async def admin_backfill(
         raise HTTPException(status_code=401, detail="Invalid or missing X-Debug-Token header")
     if _backfill_lock.locked():
         raise HTTPException(status_code=409, detail="Backfill is already running")
-    return await run_backfill(required_days=days, max_downloads=max_downloads)
+    res = await run_backfill(required_days=days, max_downloads=max_downloads)
+    try:
+        await ingest_daily_index_bars()
+    except Exception:
+        logger.exception("Index ingestion during admin backfill failed")
+    return res
 
 
 @app.get("/api/sources")
