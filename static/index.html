@@ -550,11 +550,11 @@
 
         <div x-show="chainData && !chainData.error && chainData.pcr_trend"
              class="px-4 py-3 border-b border-gray-800 grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-          <div><span class="text-gray-600">PCR timeline</span><b class="block mono text-gray-300" x-text="(chainData.pcr_trend?.samples || 0) + ' snapshots'"></b></div>
-          <div><span class="text-gray-600">PCR change</span><b class="block mono text-blue-300" x-text="chainData.pcr_trend?.pcr_change != null ? (chainData.pcr_trend.pcr_change >= 0 ? '+' : '') + chainData.pcr_trend.pcr_change.toFixed(2) : '?'"></b></div>
-          <div><span class="text-gray-600">Max pain shift</span><b class="block mono text-purple-300" x-text="chainData.pcr_trend?.max_pain_change != null ? (chainData.pcr_trend.max_pain_change >= 0 ? '+' : '') + fmt2(chainData.pcr_trend.max_pain_change) : '?'"></b></div>
-          <div><span class="text-gray-600">PCR state</span><b class="block mono text-amber-300" x-text="chainData.pcr_trend?.pcr_state || 'INSUFFICIENT_HISTORY'"></b></div>
-          <p class="col-span-full text-[10px] text-gray-600">Timeline is derived from stored public option-chain observations; it is not a standalone trade signal.</p>
+          <div><span class="text-gray-600">PCR timeline</span><b class="block mono text-gray-300" x-text="(chainData.pcr_trend?.samples || 0) + (chainData.pcr_trend?.samples === 1 ? ' snapshot (1st scan)' : ' snapshots')"></b></div>
+          <div><span class="text-gray-600">PCR change</span><b class="block mono text-blue-300" x-text="(chainData.pcr_trend?.samples > 1 && chainData.pcr_trend?.pcr_change != null) ? ((chainData.pcr_trend.pcr_change >= 0 ? '+' : '') + chainData.pcr_trend.pcr_change.toFixed(2)) : 'Baseline set'"></b></div>
+          <div><span class="text-gray-600">Max pain shift</span><b class="block mono text-purple-300" x-text="(chainData.pcr_trend?.samples > 1 && chainData.pcr_trend?.max_pain_change != null) ? ((chainData.pcr_trend.max_pain_change >= 0 ? '+' : '') + fmt2(chainData.pcr_trend.max_pain_change)) : 'Baseline set'"></b></div>
+          <div><span class="text-gray-600">PCR state</span><b class="block mono text-amber-300" x-text="(chainData.pcr_trend?.samples > 1) ? (chainData.pcr_trend?.pcr_state || 'STABLE') : 'Awaiting 2nd scan'"></b></div>
+          <p class="col-span-full text-[10px] text-gray-600">Timeline is derived from stored public option-chain observations; it tracks intraday changes after 2 or more scans.</p>
         </div>
 
         <!-- OI bar chart -->
