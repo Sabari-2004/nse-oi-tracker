@@ -347,8 +347,22 @@ async def scheduled_market_close() -> None:
     market instead of the last time a symbol happened to be published.
     """
     try:
-        trade_date = ist_trade_date(now_ist())
+        observed_at = now_ist()
+        trade_date = ist_trade_date(observed_at)
         symbols = await asyncio.to_thread(repository.unresolved_event_symbols, trade_date)
+        # A delayed/manual invocation may run after the event's calendar day.
+        # Catch up the newest unresolved session instead of silently leaving it
+        # open; the normal 15:31 scheduler still uses the current IST date.
+        if not symbols:
+            pending_date = await asyncio.to_thread(repository.latest_unresolved_event_trade_date)
+            if pending_date and pending_date != trade_date:
+                trade_date = pending_date
+                observed_at = datetime.fromisoformat(
+                    f"{trade_date}T15:31:00"
+                ).replace(tzinfo=IST)
+                symbols = await asyncio.to_thread(
+                    repository.unresolved_event_symbols, trade_date
+                )
         refreshed = 0
         if symbols:
             try:
@@ -363,11 +377,11 @@ async def scheduled_market_close() -> None:
                               or row.get("ltp") or 0) > 0
                 }
                 refreshed = await asyncio.to_thread(
-                    repository.refresh_event_prices, final_prices, now_ist(),
+                    repository.refresh_event_prices, final_prices, observed_at,
                 )
             except Exception:
                 logger.warning("Final-price refresh before close failed; grading with tracked prices")
-        expired = await asyncio.to_thread(repository.expire_open_events, now_ist())
+        expired = await asyncio.to_thread(repository.expire_open_events, observed_at)
         logger.info(
             "Market-close processing expired %s event(s) (refreshed %s price(s))",
             expired, refreshed,
@@ -434,7 +448,9 @@ async def scheduled_bhavcopy_ingestion() -> None:
     await ingest_daily_index_bars()
     if stored:
         try:
-            trade_date = ist_trade_date(now_ist())
+            # Regrade the date actually ingested. This also makes delayed or
+            # manually replayed ingestion repair the latest stored session.
+            trade_date = repository.latest_daily_equity_trade_date() or ist_trade_date(now_ist())
             regraded = await asyncio.to_thread(repository.regrade_with_bhavcopy_close, trade_date)
             if regraded:
                 logger.info("Bhavcopy re-grade updated %s day-end result(s) for %s", regraded, trade_date)

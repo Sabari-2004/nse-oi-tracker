@@ -311,6 +311,14 @@ class SignalRepository:
             ).fetchone()
         return dict(row)
 
+    def latest_daily_equity_trade_date(self) -> str | None:
+        """Return the newest stored daily equity-bar date, if any."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT MAX(trade_date) AS trade_date FROM daily_equity_bars"
+            ).fetchone()
+        return str(row["trade_date"]) if row and row["trade_date"] else None
+
     def record_option_chain_snapshot(self, analysis: dict[str, Any], captured_at: datetime) -> bool:
         """Store one immutable public option-chain observation per symbol/minute."""
         captured_at = as_ist(captured_at)
@@ -745,6 +753,17 @@ class SignalRepository:
                 (trade_date,),
             ).fetchall()
         return [str(row["symbol"]) for row in rows]
+
+    def latest_unresolved_event_trade_date(self) -> str | None:
+        """Return the newest trade date with an unresolved event, if any."""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT MAX(trade_date) AS trade_date FROM signal_events
+                WHERE archived = 0 AND status IN ('OPEN', 'TG1_HIT')
+                """
+            ).fetchone()
+        return str(row["trade_date"]) if row and row["trade_date"] else None
 
     def refresh_event_prices(self, prices: dict[str, float], observed_at: datetime) -> int:
         """Update tracked current_price for unresolved events from a final poll.
