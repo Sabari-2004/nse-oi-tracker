@@ -63,7 +63,7 @@ from analytics.technical import ema as calculate_ema
 from collector.bhavcopy import collect_equity_bhavcopy
 from collector.backfill import backfill_recent_bhavcopies, recent_nse_trading_dates
 from collector.index_backfill import backfill_index_bars
-from app.database_backup import restore_latest_backup, upload_database_snapshot
+from app.database_backup import restore_latest_backup, restore_bundled_seed, upload_database_snapshot
 from collector.participant_oi import collect_participant_oi
 from signal_engine.quality import apply_daily_technical_context, apply_intraday_observation_context
 from analytics.market_overview import normalize_market_overview
@@ -489,11 +489,12 @@ async def run_backfill(*, required_days: int = 60, max_downloads: int = 60) -> d
 async def automatic_startup_backfill() -> None:
     if not settings.startup_backfill:
         return
-    if repository.daily_equity_bar_summary().get("bars", 0) > 0:
+    summary = repository.daily_equity_bar_summary()
+    if not bhavcopy_backfill_required(summary):
         return
-    logger.warning("Daily bhavcopy history is empty; automatic bounded backfill is starting. Monitor /api/health.")
+    logger.info("Daily bhavcopy is missing recent dates; automatic bounded backfill is starting. Monitor /api/health.")
     try:
-        result = await run_backfill()
+        result = await run_backfill(required_days=5, max_downloads=5)
         logger.info("Automatic bhavcopy backfill finished: %s", result)
     except Exception:
         logger.exception("Automatic bhavcopy backfill failed")
@@ -586,13 +587,15 @@ async def lifespan(app: FastAPI):
     # and bounded, so an unavailable bucket never blocks application startup.
     if repository.daily_equity_bar_summary().get("bars", 0) == 0:
         await asyncio.to_thread(restore_latest_backup, settings.database_path)
+    if repository.daily_equity_bar_summary().get("bars", 0) == 0:
+        await asyncio.to_thread(restore_bundled_seed, settings.database_path)
     # Render Free has an ephemeral filesystem; run one bounded backfill without
     # blocking health/startup. The deployment setting controls whether it runs.
-    if repository.daily_equity_bar_summary().get("bars", 0) == 0:
+    if bhavcopy_backfill_required(repository.daily_equity_bar_summary()):
         if settings.startup_backfill and render_startup_backfill_enabled():
             asyncio.create_task(automatic_startup_backfill())
         else:
-            logger.warning("Daily bhavcopy history is empty and automatic backfill is disabled.")
+            logger.warning("Daily bhavcopy history is empty or stale and automatic backfill is disabled.")
     if repository.daily_index_bar_summary().get("bars", 0) == 0 and os.getenv("NSE_OI_INDEX_BACKFILL", "0").lower() not in {"0", "false", "no"}:
         asyncio.create_task(asyncio.to_thread(backfill_index_bars, repository, days=60, max_downloads=60))
     # A newly deployed year is unknown until NSE's public calendar loads.

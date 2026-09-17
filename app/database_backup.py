@@ -91,3 +91,44 @@ def restore_latest_backup(database_path: Path) -> bool:
     except (urllib.error.URLError, OSError, ValueError, sqlite3.Error, gzip.BadGzipFile, json.JSONDecodeError):
         logger.warning("SQLite backup restore skipped: no usable backup available")
         return False
+
+
+def restore_bundled_seed(database_path: Path) -> bool:
+    """Populate empty database from bundled repository seed if present."""
+    project_root = Path(__file__).resolve().parents[1]
+    seed_gz = project_root / "data" / "seed_bhavcopy.sqlite3.gz"
+    if not seed_gz.exists():
+        return False
+    try:
+        database_path = Path(database_path)
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+        if database_path.exists():
+            try:
+                with sqlite3.connect(database_path) as conn:
+                    count = conn.execute("SELECT COUNT(*) FROM daily_equity_bars").fetchone()[0]
+                    if count > 0:
+                        return False
+            except Exception:
+                pass
+        with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            with gzip.open(seed_gz, "rb") as f_in, open(tmp_path, "wb") as f_out:
+                shutil.copyfileobj(f_in, f_out)
+            with sqlite3.connect(database_path) as dest:
+                dest.execute(f"ATTACH DATABASE '{tmp_path.as_posix()}' AS seed")
+                dest.execute("INSERT OR IGNORE INTO daily_equity_bars SELECT * FROM seed.daily_equity_bars")
+                try:
+                    dest.execute("INSERT OR IGNORE INTO daily_index_bars SELECT * FROM seed.daily_index_bars")
+                except Exception:
+                    pass
+                dest.commit()
+                dest.execute("DETACH DATABASE seed")
+            logger.info("Restored bundled bhavcopy seed into %s", database_path.name)
+            return True
+        finally:
+            tmp_path.unlink(missing_ok=True)
+    except Exception:
+        logger.exception("Failed to restore bundled bhavcopy seed")
+        return False
+
