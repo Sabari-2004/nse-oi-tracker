@@ -28,6 +28,7 @@ from app.nse_fetcher import (
 )
 from app.angel_one import angel_one
 from config.settings import get_settings
+from app.market_calendar import get_market_status, MARKET_STATUS_OPEN
 
 logger = logging.getLogger(__name__)
 
@@ -420,7 +421,17 @@ def get_option_chain_analysis(symbol: str) -> dict:
     is_index = symbol in INDICES
     raw = fetch_option_chain_index(symbol) if is_index else fetch_option_chain_equity(symbol)
     if not raw:
-        return {"symbol": symbol, "error": "NSE returned no data (market closed or IP restricted)"}
+        if get_market_status() != MARKET_STATUS_OPEN:
+            return {
+                "symbol": symbol,
+                "error": "NSE option-chain data is unavailable while the market is closed. Try again during market hours (09:15–15:30 IST).",
+                "error_code": "MARKET_CLOSED",
+            }
+        return {
+            "symbol": symbol,
+            "error": "NSE returned no option-chain data during market hours. The NSE feed may be temporarily unavailable or restricting this cloud IP.",
+            "error_code": "NSE_FEED_UNAVAILABLE",
+        }
     return _parse_option_chain(raw, symbol)
 
 
