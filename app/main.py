@@ -1079,9 +1079,12 @@ async def option_chain(symbol: str, refresh: bool = Query(False)):
 
     result = await asyncio.to_thread(get_option_chain_analysis, symbol)
 
-    # Never return 503 ? return a structured response with error info
+    # Never return 503 — return a structured response with error info
     # so the frontend can display a friendly message
     if "error" in result:
+        fallback = cache.get(f"last_good_chain:{symbol}")
+        if fallback:
+            return {"source": "cache_fallback", **fallback}
         logger.warning(f"Option chain error for {symbol}: {result['error']}")
         return JSONResponse(
             status_code=200,
@@ -1107,7 +1110,10 @@ async def option_chain(symbol: str, refresh: bool = Query(False)):
         logger.exception("Could not persist option-chain history for %s", symbol)
     result["pcr_history"] = history
     result["pcr_trend"] = summarize_pcr_trend(history)
-    cache.set(cache_key, result, ttl=settings.cache_ttl_seconds)
+    # Cache longer when market is closed so after-hours requests do not spam NSE
+    chain_ttl = 1800 if not is_market_open() else settings.cache_ttl_seconds
+    cache.set(cache_key, result, ttl=chain_ttl)
+    cache.set(f"last_good_chain:{symbol}", result, ttl=86400)
     return {"source": "live", **result}
 
 

@@ -591,6 +591,17 @@ def _fetch_option_chain(symbol: str, market_type: str) -> dict | None:
         f"{NSE_BASE}/api/option-chain-contract-info?symbol={encoded_symbol}",
         referer="https://www.nseindia.com/option-chain",
     )
+    if not contract_info or not (contract_info.get("expiryDates")):
+        seed_url = (
+            f"{NSE_BASE}/get-quotes/derivatives?symbol={encoded_symbol}"
+            if market_type == "Equity" else f"{NSE_BASE}/option-chain"
+        )
+        contract_info = _nse.get_seeded(
+            seed_url=seed_url,
+            seed_referer="https://www.google.com/",
+            api_url=f"{NSE_BASE}/api/option-chain-contract-info?symbol={encoded_symbol}",
+            api_referer="https://www.nseindia.com/option-chain",
+        )
     expiry_dates = (contract_info or {}).get("expiryDates", [])
     if not expiry_dates:
         logger.warning("No expiry dates returned for option chain %s", symbol)
