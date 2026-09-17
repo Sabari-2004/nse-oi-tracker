@@ -11,8 +11,14 @@ from collector.bhavcopy import collect_equity_bhavcopy
 from database.repository import SignalRepository
 from app.market_calendar import is_trading_holiday
 from config.settings import get_settings
+from utils.time import now_ist
 
 logger = logging.getLogger(__name__)
+
+
+def default_backfill_end_date() -> date:
+    """Return yesterday in IST for the CLI's completed-session boundary."""
+    return now_ist().date() - timedelta(days=1)
 
 
 def recent_nse_trading_dates(end_date: date, count: int) -> list[date]:
@@ -65,7 +71,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill free public NSE EQ bhavcopy bars.")
     parser.add_argument("--days", type=int, default=60, help="Recent NSE trading days required (default: 60)")
     parser.add_argument("--max-downloads", type=int, default=60, help="Strict cap for this run (default: 60)")
-    parser.add_argument("--end-date", type=date.fromisoformat, default=date.today() - timedelta(days=1))
+    parser.add_argument(
+        "--end-date",
+        type=date.fromisoformat,
+        default=default_backfill_end_date(),
+    )
     arguments = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     result = backfill_recent_bhavcopies(

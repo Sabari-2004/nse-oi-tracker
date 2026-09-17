@@ -1,6 +1,8 @@
-from datetime import date
+from datetime import date, datetime
 
+from collector import backfill
 from collector.backfill import backfill_recent_bhavcopies, recent_nse_trading_dates
+from utils.time import IST
 
 
 class FakeRepository:
@@ -16,6 +18,15 @@ class FakeRepository:
         self.saved.extend(bars)
         self.existing.update(bar["trade_date"] for bar in bars)
         return len(bars)
+
+
+def test_default_backfill_end_date_uses_ist(monkeypatch):
+    monkeypatch.setattr(
+        backfill,
+        "now_ist",
+        lambda: datetime(2026, 9, 17, 0, 15, tzinfo=IST),
+    )
+    assert backfill.default_backfill_end_date() == date(2026, 9, 16)
 
 
 def test_recent_dates_exclude_weekends_and_known_holidays():
