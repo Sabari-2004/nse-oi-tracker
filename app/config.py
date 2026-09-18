@@ -29,7 +29,7 @@ OI_CHANGE_THRESHOLD    = 3.00    # 3.00% — filter routine OI churn
 # be discarded because the score awarded no points for modest price/OI moves.
 
 CONFIDENCE_HIGH   = 75   # ⭐⭐⭐⭐ — very high confidence
-CONFIDENCE_MEDIUM = 65   # ⭐⭐ — diagnostic tier only; not published by default
+CONFIDENCE_MEDIUM = 60   # ⭐⭐ — actionable medium confidence tier
 
 # Quality-feed guardrails reduce flip-flops and alert noise. They do not turn
 # public-data observations into guaranteed trade recommendations.
@@ -43,14 +43,12 @@ QUALITY_MAX_SIGNALS = 10
 
 # ─── Liquidity filter ─────────────────────────────────────────────────────────
 
-# Minimum absolute OI in contracts (removes penny/illiquid F&O stocks)
+# Minimum absolute OI in contracts (removes penny/illiquid F&O stocks, retains high-value lots)
+MIN_OI_ABSOLUTE = 10_000
 
-MIN_OI_ABSOLUTE = 100_000
-
-# The live dashboard is intentionally selective. Rows below this score remain
-# available to diagnostics/backtests but are not presented as active signals.
-PUBLISH_MIN_CONFIDENCE = 75
-PUBLISH_MIN_OI_ABSOLUTE = 100_000
+# The live dashboard publishes confirmed actionable signals across both HIGH and MEDIUM tiers.
+PUBLISH_MIN_CONFIDENCE = 60
+PUBLISH_MIN_OI_ABSOLUTE = 10_000
 
 
 

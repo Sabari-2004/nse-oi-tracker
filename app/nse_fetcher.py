@@ -72,10 +72,11 @@ NAV_EXTRA = {
     "Upgrade-Insecure-Requests": "1",
 }
 
-# Seed pages visited on session startup (derivatives watch and option chain set full market cookies)
+# Seed pages visited on session startup (homepage sets Akamai cookies, then oi-spurts and option-chain)
 SEED_PAGES = [
-    ("https://www.nseindia.com/market-data/equity-derivatives-watch", "https://www.google.com/"),
-    ("https://www.nseindia.com/option-chain", "https://www.nseindia.com/market-data/equity-derivatives-watch"),
+    ("https://www.nseindia.com/", "https://www.google.com/"),
+    ("https://www.nseindia.com/market-data/oi-spurts", "https://www.nseindia.com/"),
+    ("https://www.nseindia.com/option-chain", "https://www.nseindia.com/"),
 ]
 
 
@@ -430,8 +431,16 @@ def fetch_all_fno_oi_change() -> list[dict]:
     """
     data = _nse.get(
         f"{NSE_BASE}/api/live-analysis-oi-spurts-underlyings",
-        referer="https://www.nseindia.com/market-data/equity-derivatives-watch",
+        referer=f"{NSE_BASE}/market-data/oi-spurts",
     )
+    if not data or not (data.get("data")):
+        logger.info("OI spurts direct get empty or challenged, attempting seeded fetch")
+        data = _nse.get_seeded(
+            seed_url=f"{NSE_BASE}/market-data/oi-spurts",
+            seed_referer=f"{NSE_BASE}/",
+            api_url=f"{NSE_BASE}/api/live-analysis-oi-spurts-underlyings",
+            api_referer=f"{NSE_BASE}/market-data/oi-spurts",
+        )
     if not data:
         return []
     rows = data.get("data", [])
